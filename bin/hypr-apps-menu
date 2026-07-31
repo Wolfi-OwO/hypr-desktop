@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# GNOME apps-menu equivalent: application grid as a dropdown under the button.
+set -uo pipefail
+
+exec rofi -show drun \
+    -hover-select \
+    -me-select-entry '' \
+    -me-accept-entry MousePrimary \
+    -click-to-exit \
+    -show-icons \
+    -drun-display-format '{name}' \
+    -theme "$HOME/.config/rofi/dropdown-left.rasi"

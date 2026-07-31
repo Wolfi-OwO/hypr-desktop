@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# Screenshot helper.
+#
+# Two bugs this file exists to avoid, both hit before:
+#
+#  1. No guard -> every DRUCK press spawned another `slurp` overlay. They
+#     stack, each dims the screen, so the display got progressively whiter.
+#     Fixed by refusing to start when a slurp is already up.
+#
+#  2. An flock on fd 9 -> `wl-copy` daemonises and INHERITS that descriptor,
+#     so the lock was never released and the key appeared dead. No flock now.
+#
+#  3. Closing stdin (0<&-) to avoid (2) -> `swappy -f -` READS the image from
+#     stdin, so it failed with "unable to reopen stdin in binary mode".
+#     Fixed by writing to a real file and handing swappy that path, which
+#     also leaves you with a saved copy.
+#
+# Usage: hypr-screenshot region|full|window|copy
+
+set -uo pipefail
+
+MODE="${1:-region}"
+
+# Target directory. $XDG_PICTURES_DIR is NOT exported here -- it only appears in
+# ~/.config/user-dirs.dirs, and the login chain does not put that file into the
+# environment. The earlier fallback to $HOME/Pictures therefore created a
+# second, empty pictures folder while the real ones live under
+# ~/documents/private/pictures. `xdg-user-dir` reads user-dirs.dirs directly and
+# returns the path that is actually configured.
+PICTURES="${XDG_PICTURES_DIR:-}"
+[ -n "$PICTURES" ] || PICTURES=$(xdg-user-dir PICTURES 2>/dev/null)
+[ -n "$PICTURES" ] || PICTURES="$HOME/Pictures"
+DIR="$PICTURES/Screenshots"
+mkdir -p "$DIR"
+FILE="$DIR/screenshot-$(date +%Y%m%d-%H%M%S).png"
+
+# Clean up a stuck slurp rather than silently giving up.
+#
+# This used to be a bare `exit 0` when slurp was already running. That was meant
+# to prevent stacked selection overlays, but it made the tool unreliable: once a
+# slurp got stuck -- because ULauncher as an XWayland window grabbed the
+# pointer, say, or because the workspace was switched mid-selection -- EVERY
+# further press of the key did nothing at all, without comment, until the
+# process was killed by hand.
+#
+# Now an existing slurp is terminated and a fresh one started. Stacked overlays
+# are still ruled out, but a jammed state heals itself on the next key press.
+if pgrep -x slurp >/dev/null 2>&1; then
+    pkill -x slurp 2>/dev/null
+    # slurp needs a moment to tear its layer surface down. Without the pause the
+    # new slurp starts while the old one still holds the pointer.
+    sleep 0.2
+fi
+
+notify() {
+    command -v notify-send >/dev/null 2>&1 && notify-send -a "Screenshot" "$1" "${2:-}"
+}
+
+# The editor no longer closes by itself.
+#
+# There used to be a watcher here that killed swappy as soon as focus moved
+# away, imitating GNOME's behaviour. It broke two things:
+#
+#   1. Merely switching workspace counted as losing focus and shot the editor
+#      down.
+#   2. Under Wayland the clipboard belongs to a living process. With the editor
+#      gone, an image copied there was gone too.
+#
+# Point 2 is solved independently -- every shot goes straight to the clipboard
+# through wl-copy. Point 1 could only be mitigated, not fixed, and automatic
+# closing was explicitly not wanted. The editor now stays open until it is
+# closed with Escape or through its window, like any other window.
+
+# Put the shot on the clipboard immediately.
+#
+# `wl-copy` detaches from its caller and holds the clipboard as a process of its
+# own. Under Wayland that is mandatory: the clipboard belongs to a living window
+# or process, and when that ends the content is gone. That is exactly why an
+# image copied in swappy with CTRL+C disappeared as soon as the editor was
+# closed.
+#
+# Doing it here, right after the capture, has a second benefit: there is nothing
+# left to copy in the editor -- every shot is ready immediately, whether the
+# editor is still open or not.
+to_clipboard() {
+    command -v wl-copy >/dev/null 2>&1 || return 0
+    wl-copy --type image/png < "$1" >/dev/null 2>&1 &
+}
+
+open_editor() {
+    # swappy opens the shot for annotation and can save over it.
+    #
+    # Exactly ONE editor at a time. Every shot used to leave its swappy running
+    # (nothing closes it, and Escape only reaches the focused one), so they
+    # piled up -- five live swappy windows were sitting on top of each other
+    # here. Stacked identical windows are why the editor "is not recognised as
+    # one element": Escape closed the front one and uncovered the next, which
+    # looks like unrelated windows closing too.
+    #
+    # pkill -x matches the process NAME exactly, so it can never match this
+    # script's own command line.
+    pkill -x swappy 2>/dev/null
+
+    swappy -f "$1" &
+    wait $!
+}
+
+case "$MODE" in
+    region)
+        geom=$(slurp 2>/dev/null) || exit 0
+        [ -n "$geom" ] || exit 0
+        grim -g "$geom" "$FILE" || { notify "Capture failed"; exit 1; }
+        to_clipboard "$FILE"
+        open_editor "$FILE"
+        ;;
+
+    full)
+        grim "$FILE" || { notify "Capture failed"; exit 1; }
+        to_clipboard "$FILE"
+        open_editor "$FILE"
+        ;;
+
+    window)
+        geom=$(hyprctl activewindow -j 2>/dev/null \
+             | jq -r 'if .at then "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])" else empty end')
+        [ -n "$geom" ] || exit 0
+        grim -g "$geom" "$FILE" || { notify "Capture failed"; exit 1; }
+        to_clipboard "$FILE"
+        open_editor "$FILE"
+        ;;
+
+    copy)
+        geom=$(slurp 2>/dev/null) || exit 0
+        [ -n "$geom" ] || exit 0
+        grim -g "$geom" "$FILE" || { notify "Capture failed"; exit 1; }
+        to_clipboard "$FILE"
+        notify "In die Zwischenablage kopiert" "$(basename "$FILE")"
+        ;;
+
+    *)
+        echo "usage: hypr-screenshot region|full|window|copy" >&2
+        exit 1
+        ;;
+esac

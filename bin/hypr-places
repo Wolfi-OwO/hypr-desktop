@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Produces the list for the Places menu: label<TAB>path<TAB>icon-codepoint
+#
+# The paths come from xdg-user-dir rather than being guessed. On this system
+# they deviate considerably from the usual layout:
+#   DOWNLOAD  -> ~/downloads              (lower case)
+#   PICTURES  -> ~/documents/private/pictures
+#   VIDEOS    -> ~/documents/private/videos
+#   MUSIC     -> ~/Music                  (does not exist; ~/music does)
+# Hard-coded names such as ~/Downloads therefore pointed at nothing.
+#
+# Entries whose directory does not exist are left out.
+
+set -uo pipefail
+
+emit() {  # label, pfad, codepoint
+    [ -d "$2" ] && printf '%s\t%s\t%s\n' "$1" "$2" "$3"
+}
+
+emit "Persönlicher Ordner" "$HOME" 0xf02dc
+
+for spec in \
+    "Schreibtisch:DESKTOP" \
+    "Dokumente:DOCUMENTS" \
+    "Downloads:DOWNLOAD" \
+    "Musik:MUSIC" \
+    "Bilder:PICTURES" \
+    "Videos:VIDEOS"
+do
+    label=${spec%%:*}
+    key=${spec##*:}
+    p=$(xdg-user-dir "$key" 2>/dev/null)
+    # xdg-user-dir returns $HOME when nothing is configured, which would be a
+    # duplicate of the first entry.
+    [ -n "$p" ] && [ "$p" != "$HOME" ] && emit "$label" "$p" 0xf0770
+done
+
+# Add the lower-case variants in case xdg-user-dir does not know them.
+[ -d "$HOME/music" ]    && ! xdg-user-dir MUSIC 2>/dev/null | grep -qx "$HOME/music" \
+    && emit "Musik" "$HOME/music" 0xf0770
+[ -d "$HOME/Notes" ]    && emit "Notizen" "$HOME/Notes" 0xf0770
+[ -d "$HOME/projects" ] && emit "Projekte" "$HOME/projects" 0xf0770
+
+emit "Konfiguration" "$HOME/.config" 0xf0770
+emit "Dateisystem" "/" 0xf02ca
+
+printf '%s\t%s\t%s\n' "Papierkorb" "trash:///" 0xf05e8

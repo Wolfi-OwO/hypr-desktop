@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Quick-settings dropdown behind the BATTERY icon — GNOME's quick settings:
+# power profiles, appearance (dark/light), and the power settings panel.
+# Session actions (lock / log out / shut down) live behind the power icon in
+# hypr-power-menu instead.
+#
+# Icons use $'\U000fxxxx' ANSI-C escapes so this file stays pure ASCII;
+# literal Nerd Font glyphs get stripped in transit.
+set -uo pipefail
+
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/hypr-menu-lib.sh"
+
+I_PERF=$'\U000f0e31'   # rocket-launch
+I_BAL=$'\U000f0595'    # scale-balance
+I_SAVE=$'\U000f0084'   # battery-charging
+I_DARK=$'\U000f0594'   # weather-night
+I_LIGHT=$'\U000f0599'  # weather-sunny
+I_COG=$'\U000f0493'    # cog
+I_BATT=$'\U000f0079'   # battery
+I_CHECK=$'\U000f012c'  # check
+
+profile=$(powerprofilesctl get 2>/dev/null || echo "")
+scheme=$(gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null | tr -d "'")
+
+pmark() { [ "$1" = "$profile" ] && printf '  %s' "$I_CHECK"; }
+smark() { [ "$1" = "$scheme" ]  && printf '  %s' "$I_CHECK"; }
+
+cap=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null || echo "?")
+status=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null || echo "")
+
+header="$I_BATT   Battery ${cap}%${status:+  ($status)}"
+perf="$I_PERF   Performance$(pmark performance)"
+bal="$I_BAL   Balanced$(pmark balanced)"
+save="$I_SAVE   Power Saver$(pmark power-saver)"
+dark="$I_DARK   Dark Mode$(smark prefer-dark)"
+light="$I_LIGHT   Light Mode$(smark prefer-light)"
+settings="$I_COG   Power Settings"
+
+choice=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+    "$header" "$perf" "$bal" "$save" "$dark" "$light" "$settings" \
+    | rofi_right "Quick Settings") || exit 0
+
+case "$choice" in
+    "$header")   exit 0 ;;   # informational row
+    "$perf")     exec powerprofilesctl set performance ;;
+    "$bal")      exec powerprofilesctl set balanced ;;
+    "$save")     exec powerprofilesctl set power-saver ;;
+    "$dark")
+        gsettings set org.gnome.desktop.interface color-scheme prefer-dark
+        exit 0 ;;
+    "$light")
+        gsettings set org.gnome.desktop.interface color-scheme prefer-light
+        exit 0 ;;
+    "$settings") exec gnome-control-center power ;;
+    *)           exit 0 ;;
+esac

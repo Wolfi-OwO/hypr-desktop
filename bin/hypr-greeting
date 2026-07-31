@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Time-of-day greeting for the lock screen.
+#
+# A script of its own rather than a one-liner in hyprlock.conf: hyprlock
+# substitutes every $-variable there itself, before the shell ever sees them. A
+# `$(date +%H)` in a variable, or a `$1` in awk, would therefore already have
+# been replaced (and so be empty) before they could do anything.
+h=$(date +%H)
+h=${h#0}
+if   [ "$h" -lt 5 ];  then g="Gute Nacht"
+elif [ "$h" -lt 11 ]; then g="Guten Morgen"
+elif [ "$h" -lt 18 ]; then g="Guten Tag"
+else                       g="Guten Abend"
+fi
+printf '%s, %s\n' "$g" "${USER:-woofi}"

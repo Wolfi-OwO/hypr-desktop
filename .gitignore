@@ -1,0 +1,13 @@
+# Local, machine-specific, or personal — never committed.
+config/hypr/weather.conf
+config/nvim/lazy-lock.json.bak
+config/nvim/.netrwhist
+
+# Editor and OS noise
+*.orig
+*.bak
+*.rej
+*.swp
+__pycache__/
+.mypy_cache/
+.DS_Store

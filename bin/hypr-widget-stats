@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# Emits one pipe-separated line of system stats for the Quickshell widgets.
+#
+# Kept out of the QML because a JS template literal treats ${...} as
+# interpolation, so shell expansions were eaten by the QML parser.
+#
+# CPU: reports the MEDIAN of the per-core loads, not the highest value -- so a
+# single core at its limit no longer drags the number up.
+#
+# The measurement runs between TWO CALLS, not within one call. This used to say
+# `sleep 1` to get two samples, which made every call take over a second -- and
+# because the bar used this script, every reading there lagged accordingly: a
+# volume change only became visible around 600 ms later even though the event
+# had arrived at once. The previous sample now lives in a file, so the call
+# returns with virtually no delay.
+#
+# Output: cpu%|memGB|tempC|batt%|battState|uptime
+
+set -uo pipefail
+
+# --- per-core CPU, median ---------------------------------------------------
+CACHE="${XDG_RUNTIME_DIR:-/tmp}/hypr-cpu-snapshot"
+LASTV="${XDG_RUNTIME_DIR:-/tmp}/hypr-cpu-last"
+
+# Minimum spacing between two samples. Since the bar became event-driven, calls
+# can be a few milliseconds apart -- and over a window that short the load is
+# pure noise (0 or 100). If the last sample is not old enough yet it is kept and
+# the
+# zuletzt berechnete Wert erneut ausgegeben.
+MIN_GAP=1
+
+reuse_cpu=""
+if [ -r "$CACHE" ] && [ -r "$LASTV" ]; then
+    age=$(( $(date +%s) - $(stat -c %Y "$CACHE" 2>/dev/null || echo 0) ))
+    [ "$age" -lt "$MIN_GAP" ] && reuse_cpu=$(cat "$LASTV" 2>/dev/null)
+fi
+
+mapfile -t snap2 < <(grep -E '^cpu[0-9]+ ' /proc/stat)
+
+if [ -n "$reuse_cpu" ]; then
+    # Do NOT overwrite the sample, or the window keeps shrinking.
+    snap1=("${snap2[@]}")
+elif [ -r "$CACHE" ]; then
+    mapfile -t snap1 < "$CACHE"
+else
+    # First call: there is nothing to compare against yet. Rather than waiting a
+    # second, the same sample is used -- that yields 0 %, and the very next call
+    # produces a real value.
+    snap1=("${snap2[@]}")
+fi
+[ -z "$reuse_cpu" ] && printf '%s\n' "${snap2[@]}" > "$CACHE"
+
+# The core count cannot change, but a stale file could be shorter -- better to
+# start over than to compute the wrong thing.
+if [ "${#snap1[@]}" -ne "${#snap2[@]}" ]; then
+    snap1=("${snap2[@]}")
+fi
+
+loads=()
+for i in "${!snap1[@]}"; do
+    read -r _ a1 b1 c1 d1 e1 _ <<< "${snap1[$i]}"
+    read -r _ a2 b2 c2 d2 e2 _ <<< "${snap2[$i]}"
+    idle1=$((d1 + e1)); tot1=$((a1 + b1 + c1 + d1 + e1))
+    idle2=$((d2 + e2)); tot2=$((a2 + b2 + c2 + d2 + e2))
+    dt=$((tot2 - tot1)); di=$((idle2 - idle1))
+    if [ "$dt" -gt 0 ]; then
+        loads+=( $(( (100 * (dt - di)) / dt )) )
+    fi
+done
+
+cpu=0
+n=${#loads[@]}
+if [ "$n" -gt 0 ]; then
+    # median of the per-core loads
+    mapfile -t sorted < <(printf '%s\n' "${loads[@]}" | sort -n)
+    mid=$((n / 2))
+    if [ $((n % 2)) -eq 1 ]; then
+        cpu=${sorted[$mid]}
+    else
+        cpu=$(( (sorted[mid - 1] + sorted[mid]) / 2 ))
+    fi
+fi
+
+# --- memory, temperature, battery, uptime -----------------------------------
+mem=$(free -g 2>/dev/null | awk '/^Mem:/{print $3}')
+mem=${mem:-0}
+
+# Temperature: MEDIAN across the individual cores.
+#
+# This used to read temp1_input. On coretemp that is "Package id 0", which is
+# by definition the MAXIMUM across all cores -- so what was displayed was always
+# the hottest core. Measured under load: package at 97 degrees while the
+# individual cores sat at 62 to 66 and only Core 0 was at 96. A
+# einzelner Kern am Anschlag hat die Anzeige also dauerhaft hochgezogen.
+#
+# Only sensors whose label starts with "Core" are considered; the package and
+# everything else are left out.
+temps=()
+for f in /sys/devices/platform/coretemp.*/hwmon/hwmon*/temp*_input; do
+    [ -r "$f" ] || continue
+    lbl=$(cat "${f%_input}_label" 2>/dev/null)
+    case "$lbl" in
+        Core*) temps+=( $(( $(cat "$f" 2>/dev/null || echo 0) / 1000 )) ) ;;
+    esac
+done
+
+t=0
+if [ "${#temps[@]}" -gt 0 ]; then
+    mapfile -t sortiert < <(printf '%s\n' "${temps[@]}" | sort -n)
+    mitte=$(( ${#sortiert[@]} / 2 ))
+    if [ $(( ${#sortiert[@]} % 2 )) -eq 1 ]; then
+        t=${sortiert[$mitte]}
+    else
+        t=$(( (sortiert[mitte - 1] + sortiert[mitte]) / 2 ))
+    fi
+else
+    # No coretemp (a different machine, AMD): fall back to the first available
+    # source; that is a single value again -- better than nothing.
+    for f in /sys/class/thermal/thermal_zone*/temp; do
+        [ -r "$f" ] && { t=$(( $(cat "$f") / 1000 )); break; }
+    done
+fi
+
+bc=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null || echo 0)
+bs=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null || echo "")
+up=$(uptime -p 2>/dev/null | sed 's/^up //')
+
+# On too short a window keep the previous value, otherwise remember the new one.
+if [ -n "$reuse_cpu" ]; then
+    cpu="$reuse_cpu"
+else
+    printf '%s' "$cpu" > "$LASTV"
+fi
+
+printf '%s|%s|%s|%s|%s|%s\n' "$cpu" "$mem" "$t" "$bc" "$bs" "${up:-—}"

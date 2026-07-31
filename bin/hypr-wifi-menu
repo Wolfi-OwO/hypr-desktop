@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Themed Wi-Fi picker: rofi dropdown anchored under the bar's network icon.
+# Replaces dropping into `nmtui` in a terminal.
+#
+# Icons use $'\U000fxxxx' ANSI-C escapes so this file stays pure ASCII;
+# literal Nerd Font glyphs get stripped in transit. Codepoints verified
+# present in "FiraCode Nerd Font" via fc-match :charset=.
+set -uo pipefail
+
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/hypr-menu-lib.sh"
+
+THEME="$HOME/.config/rofi/dropdown-right.rasi"
+
+I_S4=$'\U000f0928'    # wifi-strength-4
+I_S3=$'\U000f0925'    # wifi-strength-3
+I_S2=$'\U000f0922'    # wifi-strength-2
+I_S1=$'\U000f091f'    # wifi-strength-1
+I_LOCK=$'\U000f033e'  # lock
+I_OFF=$'\U000f092d'   # wifi-off
+I_ON=$'\U000f05a9'    # wifi
+I_COG=$'\U000f0493'   # cog
+I_CHECK=$'\U000f012c' # check
+
+menu() { rofi_right "${1:-Wi-Fi}"; }
+
+radio=$(nmcli -t -f WIFI radio 2>/dev/null)
+
+if [ "$radio" != "enabled" ]; then
+    choice=$(printf '%s   Turn Wi-Fi On\n%s   Network Settings\n' "$I_ON" "$I_COG" | menu "Wi-Fi off")
+    case "$choice" in
+        *"Turn Wi-Fi On")   exec nmcli radio wifi on ;;
+        *"Network Settings") exec nm-connection-editor ;;
+        *) exit 0 ;;
+    esac
+fi
+
+# Do NOT rescan before showing the menu. A plain `nmcli dev wifi list`
+# implicitly scans and took 2534 ms, so the dropdown appeared 2.5 s after the
+# click. `--rescan no` reads the cached scan in ~39 ms. The rescan is kicked
+# off in the background instead, so the NEXT open is fresh.
+( nmcli dev wifi rescan >/dev/null 2>&1 & ) 2>/dev/null
+
+active=$(nmcli -t -f NAME connection show --active 2>/dev/null | head -1)
+
+# SSID:SIGNAL:SECURITY, strongest first, blanks and duplicates removed.
+list=$(nmcli --terse --fields SSID,SIGNAL,SECURITY dev wifi list --rescan no 2>/dev/null \
+     | awk -F: '$1 != "" { if (!seen[$1]++) print }' \
+     | sort -t: -k2 -nr)
+
+entries=""
+while IFS=: read -r ssid signal security; do
+    [ -n "$ssid" ] || continue
+    if   [ "$signal" -ge 75 ] 2>/dev/null; then icon="$I_S4"
+    elif [ "$signal" -ge 50 ] 2>/dev/null; then icon="$I_S3"
+    elif [ "$signal" -ge 25 ] 2>/dev/null; then icon="$I_S2"
+    else                                       icon="$I_S1"
+    fi
+    mark=""
+    [ "$ssid" = "$active" ] && mark="  $I_CHECK"
+    sec=""
+    [ -n "$security" ] && [ "$security" != "--" ] && sec="  $I_LOCK"
+    entries+="$icon   $ssid$sec$mark"$'\n'
+done <<< "$list"
+
+entries+="$I_OFF   Turn Wi-Fi Off"$'\n'
+entries+="$I_COG   Network Settings"$'\n'
+
+choice=$(printf '%s' "$entries" | menu "Wi-Fi")
+[ -n "$choice" ] || exit 0
+
+case "$choice" in
+    *"Turn Wi-Fi Off")   exec nmcli radio wifi off ;;
+    *"Network Settings") exec nm-connection-editor ;;
+esac
+
+# Strip the leading icon, and any trailing lock/check markers, to get the SSID.
+ssid=$(printf '%s' "$choice" \
+     | sed -E "s/^[^ ]+[[:space:]]+//; s/[[:space:]]+($I_LOCK|$I_CHECK)+[[:space:]]*$//g" \
+     | sed -E "s/[[:space:]]+($I_LOCK|$I_CHECK)//g" \
+     | sed -E 's/[[:space:]]+$//')
+[ -n "$ssid" ] || exit 0
+
+notify() { command -v notify-send >/dev/null && notify-send -a "Wi-Fi" "$1" "$2"; }
+
+# Already-known network: just bring it up.
+if nmcli -t -f NAME connection show 2>/dev/null | grep -Fxq "$ssid"; then
+    if nmcli connection up id "$ssid" >/dev/null 2>&1; then
+        notify "Connected" "$ssid"; exit 0
+    fi
+fi
+
+# Try an open connection first; if it needs a secret, ask for it.
+if nmcli dev wifi connect "$ssid" >/dev/null 2>&1; then
+    notify "Connected" "$ssid"; exit 0
+fi
+
+pass=$(rofi -dmenu -password "${ROFI_UX[@]}" -p "Password for $ssid" -theme "$THEME" </dev/null)
+[ -n "$pass" ] || exit 0
+
+if nmcli dev wifi connect "$ssid" password "$pass" >/dev/null 2>&1; then
+    notify "Connected" "$ssid"
+else
+    notify "Connection failed" "$ssid"
+fi

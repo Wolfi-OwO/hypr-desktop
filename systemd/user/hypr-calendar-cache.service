@@ -1,0 +1,40 @@
+[Unit]
+Description=Calendar cache: warm at login, save before shutdown
+Documentation=file:%h/.local/bin/hypr-calendar
+# The Evolution data server is what this reads from, so there is no point
+# starting before the session it belongs to.
+After=graphical-session-pre.target
+PartOf=graphical-session.target
+
+[Service]
+# RemainAfterExit is what makes ExecStop meaningful: without it the unit is
+# considered dead the moment ExecStart returns, and systemd would never run the
+# stop command at logout or shutdown.
+Type=oneshot
+RemainAfterExit=yes
+
+# At login: rebuild the whole look-ahead window. One run fills roughly 27 month
+# files -- the cost is in connecting to the four calendars (about 10 s each,
+# measured), not in the time span, so fetching two years ahead is nearly free
+# once the connection is up.
+#
+# Nothing waits on this. The widget reads whatever the cache already holds from
+# the last session and this replaces it underneath, file by file, atomically.
+ExecStart=%h/.local/bin/hypr-calendar --refresh
+
+# Before shutdown or logout: refresh once more, so what lands on disk is the
+# freshest possible state rather than whatever happened to be there from hours
+# ago. This is the half that makes the next boot show current events instead of
+# yesterday's.
+#
+# TimeoutStopSec below bounds it: if EDS is already going down, this must not
+# hold up the shutdown.
+ExecStop=%h/.local/bin/hypr-calendar --refresh
+
+# A full run is around 40 s when all four calendars respond. 90 s leaves room
+# for a slow one; past that, shutdown wins and the cache stays as it was.
+TimeoutStartSec=180
+TimeoutStopSec=90
+
+[Install]
+WantedBy=graphical-session.target

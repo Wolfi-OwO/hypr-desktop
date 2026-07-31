@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""Weather for the configured location -- emits JSON for the Quickshell widget.
+
+Source: Open-Meteo (free, no API key, no registration).
+Coordinates confirmed via Open-Meteo geocoding:
+    configured in ~/.config/hypr/weather.conf; see the block below
+
+Output is cached so the widget can poll often without hammering the API,
+and so a dropped network connection shows the last known reading instead of
+blanking out.
+"""
+
+import json
+import os
+import sys
+import time
+import urllib.request
+import urllib.error
+
+# Location. Read from ~/.config/hypr/weather.conf so the coordinates -- which
+# are a home address to within a few hundred metres -- are not committed to a
+# public repository. The defaults below are the centre of Vienna, which is a
+# landmark rather than anybody's house.
+#
+# weather.conf format (all optional, one KEY=VALUE per line):
+#     LAT=47.2692
+#     LON=11.4041
+#     TZ=Europe/Vienna
+#     PLACE=Innsbruck
+#
+# Coordinates for a place can be looked up without an API key:
+#     curl 'https://geocoding-api.open-meteo.com/v1/search?name=<town>&count=1'
+LAT, LON, TZ = 48.2085, 16.3721, "Europe/Vienna"
+PLACE = "Wien"
+
+_CONF = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+    "hypr", "weather.conf",
+)
+try:
+    with open(_CONF, encoding="utf-8") as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if not _line or _line.startswith("#") or "=" not in _line:
+                continue
+            _k, _v = _line.split("=", 1)
+            _k, _v = _k.strip().upper(), _v.strip()
+            if _k == "LAT":
+                LAT = float(_v)
+            elif _k == "LON":
+                LON = float(_v)
+            elif _k == "TZ":
+                TZ = _v
+            elif _k == "PLACE":
+                PLACE = _v
+except (OSError, ValueError):
+    # No config, or a malformed one: the defaults above still produce a
+    # working widget rather than an error.
+    pass
+
+# XDG_CACHE_HOME, not XDG_RUNTIME_DIR — the runtime directory is wiped when the
+# user's last session ends, so after every reboot the widget had no reading at
+# all and showed placeholders until the first network round trip came back.
+# ~/.cache persists, so the first frame shows the last known weather and the
+# refresh happens behind it.
+_CACHE_DIR = os.path.join(
+    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "hypr"
+)
+os.makedirs(_CACHE_DIR, exist_ok=True)
+CACHE = os.path.join(_CACHE_DIR, "hypr-weather.json")
+MAX_AGE = 900  # seconds; Open-Meteo updates roughly every 15 min
+
+# WMO weather code -> (Material Design codepoint, German label)
+WMO = {
+    0:  (0xF0599, "Klar"),
+    1:  (0xF0595, "Überwiegend klar"),
+    2:  (0xF0595, "Teils bewölkt"),
+    3:  (0xF0590, "Bedeckt"),
+    45: (0xF0591, "Nebel"),
+    48: (0xF0591, "Reifnebel"),
+    51: (0xF0597, "Leichter Niesel"),
+    53: (0xF0597, "Niesel"),
+    55: (0xF0597, "Starker Niesel"),
+    56: (0xF0596, "Gefrierender Niesel"),
+    57: (0xF0596, "Gefrierender Niesel"),
+    61: (0xF0596, "Leichter Regen"),
+    63: (0xF0596, "Regen"),
+    65: (0xF0596, "Starker Regen"),
+    66: (0xF0596, "Gefrierender Regen"),
+    67: (0xF0596, "Gefrierender Regen"),
+    71: (0xF0598, "Leichter Schneefall"),
+    73: (0xF0598, "Schneefall"),
+    75: (0xF0598, "Starker Schneefall"),
+    77: (0xF0598, "Schneegriesel"),
+    80: (0xF0596, "Leichte Schauer"),
+    81: (0xF0596, "Schauer"),
+    82: (0xF0596, "Starke Schauer"),
+    85: (0xF0598, "Schneeschauer"),
+    86: (0xF0598, "Schneeschauer"),
+    95: (0xF0593, "Gewitter"),
+    96: (0xF0593, "Gewitter mit Hagel"),
+    99: (0xF0593, "Gewitter mit Hagel"),
+}
+UNKNOWN = (0xF0590, "—")
+
+URL = (
+    "https://api.open-meteo.com/v1/forecast"
+    f"?latitude={LAT}&longitude={LON}"
+    "&current=temperature_2m,apparent_temperature,weather_code,"
+    "wind_speed_10m,relative_humidity_2m"
+    "&hourly=temperature_2m,weather_code,precipitation_probability"
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
+    "precipitation_probability_max"
+    f"&timezone={TZ.replace('/', '%2F')}&forecast_days=6"
+)
+
+DAYS_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+
+
+def icon(code):
+    cp, label = WMO.get(code, UNKNOWN)
+    return chr(cp), label
+
+
+def fetch():
+    req = urllib.request.Request(URL, headers={"User-Agent": "hypr-weather/1.0"})
+    with urllib.request.urlopen(req, timeout=12) as r:
+        return json.load(r)
+
+
+def build(raw):
+    import datetime
+
+    cur = raw["current"]
+    ci, cl = icon(cur["weather_code"])
+
+    # Next 8 hours, starting from the next full hour.
+    hourly = []
+    times = raw["hourly"]["time"]
+    now = datetime.datetime.now().strftime("%Y-%m-%dT%H:00")
+    try:
+        start = times.index(now) + 1
+    except ValueError:
+        start = 0
+    for i in range(start, min(start + 8, len(times))):
+        hi, hl = icon(raw["hourly"]["weather_code"][i])
+        hourly.append({
+            "time": times[i][11:16],
+            "temp": round(raw["hourly"]["temperature_2m"][i]),
+            "icon": hi,
+            "pop":  raw["hourly"]["precipitation_probability"][i] or 0,
+        })
+
+    daily = []
+    for i, d in enumerate(raw["daily"]["time"]):
+        di, dl = icon(raw["daily"]["weather_code"][i])
+        dt = datetime.date.fromisoformat(d)
+        daily.append({
+            "day":  "Heute" if i == 0 else DAYS_DE[dt.weekday()],
+            "date": dt.strftime("%d.%m."),
+            "max":  round(raw["daily"]["temperature_2m_max"][i]),
+            "min":  round(raw["daily"]["temperature_2m_min"][i]),
+            "icon": di,
+            "desc": dl,
+            "pop":  raw["daily"]["precipitation_probability_max"][i] or 0,
+        })
+
+    return {
+        "place": PLACE,
+        "temp": round(cur["temperature_2m"]),
+        "feels": round(cur["apparent_temperature"]),
+        "icon": ci,
+        "desc": cl,
+        "wind": round(cur["wind_speed_10m"]),
+        "humidity": cur["relative_humidity_2m"],
+        "hourly": hourly,
+        "daily": daily,
+        "stamp": int(time.time()),
+        "stale": False,
+    }
+
+
+def main():
+    fresh = "--force" in sys.argv
+    if not fresh and os.path.exists(CACHE):
+        try:
+            with open(CACHE) as f:
+                cached = json.load(f)
+            if time.time() - cached.get("stamp", 0) < MAX_AGE:
+                print(json.dumps(cached, ensure_ascii=False))
+                return
+        except Exception:
+            pass
+
+    try:
+        data = build(fetch())
+        with open(CACHE, "w") as f:
+            json.dump(data, f, ensure_ascii=False)
+        print(json.dumps(data, ensure_ascii=False))
+    except Exception as e:
+        # Network down: serve the last good reading, flagged stale, rather
+        # than leaving the widget blank.
+        if os.path.exists(CACHE):
+            try:
+                with open(CACHE) as f:
+                    old = json.load(f)
+                old["stale"] = True
+                print(json.dumps(old, ensure_ascii=False))
+                return
+            except Exception:
+                pass
+        print(json.dumps({
+            "place": PLACE, "temp": "—", "icon": chr(0xF0590),
+            "desc": f"nicht verfügbar", "hourly": [], "daily": [],
+            "stale": True, "error": str(e)[:80],
+        }, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

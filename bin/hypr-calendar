@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""One month of events as JSON, read from the Evolution data server.
+
+Why EDS rather than the Google API directly: the Google account is already
+signed in through GNOME Online Accounts (~/.config/goa-1.0/accounts.conf,
+CalendarEnabled=true), and the Evolution data server already keeps a
+synchronised copy for it. A separate OAuth flow would not just be work, it
+would be a second route to the same data -- with its own sign-in and its own
+expiry. Going through EDS automatically covers everything else attached to the
+account too: public holidays, birthdays, local calendars, and any further
+account added in the GNOME settings -- with no change to this file.
+
+CACHING, and it is not optional:
+`ECal.Client.connect_sync` blocks for up to `wait_for_connected` seconds per
+calendar (measured: exactly 10.01 s per source, so a good 40 s for four). With
+0 instead of 10 it never returns at all. A widget must never wait on that.
+This script therefore ALWAYS returns the last known state from the cache
+immediately and only kicks off the refresh in the background.
+
+Recurrences (birthdays, holidays) are expanded by dateutil. The EDS query does
+select the right events for the period, but it returns the DTSTART of the
+original -- so a birthday showed up under 2007 instead of in the month on
+screen.
+
+LOOK-AHEAD: one run fetches the whole span from one month back to two years
+ahead and writes a separate file for EVERY month in it. That is almost free --
+the 40 seconds are in connecting to the four calendars, not in the time span.
+Previously each month was queried on its own, which meant paging through the
+calendar triggered a fresh 40-second run every time.
+
+Usage:
+    hypr-calendar [YEAR MONTH]   print the current state (returns at once)
+    hypr-calendar --refresh ...  rebuild the look-ahead (slow, fills everything)
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+
+_RRULE = re.compile(r"^RRULE:(.+)$", re.M)
+
+# Cache location: XDG_CACHE_HOME, NOT XDG_RUNTIME_DIR.
+#
+# This used to be the runtime directory, and that is precisely why the calendar
+# was empty for the first ~15 seconds after every boot: systemd wipes
+# /run/user/<uid> when the user's last session ends, so a reboot always started
+# from nothing. With no cache the widget has to wait for a full EDS refresh,
+# and that costs about 10 s per calendar (four of them here) because
+# ECal.Client.connect_sync blocks for its whole wait_for_connected window.
+#
+# ~/.cache survives the reboot, so the first painted frame carries last
+# session's data and the refresh happens behind it. Slightly stale beats empty.
+CACHE_DIR = os.path.join(
+    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "hypr"
+)
+os.makedirs(CACHE_DIR, exist_ok=True)
+MAX_AGE = 300            # seconds; past this a background refresh is started
+MONTHS_AHEAD = 24        # how far ahead one run fetches
+MONTHS_BACK = 1
+
+# Colours for the calendars, in the order they appear. Deliberately taken from
+# the shell palette (Theme.qml) so the dots in the widget do not fall out of the
+# Reihe fallen.
+COLOURS = ["#f279b9", "#5bcefa", "#d3aaf7", "#9fe6ae", "#f7d9a0", "#ffb89a"]
+
+
+def cache_path(year, month):
+    return os.path.join(CACHE_DIR, f"hypr-calendar-{year:04d}-{month:02d}.json")
+
+
+def _monatsliste(year, month):
+    """Every month from MONTHS_BACK before to MONTHS_AHEAD after (year, month)."""
+    out = []
+    cursor = year * 12 + (month - 1) - MONTHS_BACK
+    for _ in range(MONTHS_BACK + MONTHS_AHEAD + 1):
+        out.append((cursor // 12, cursor % 12 + 1))
+        cursor += 1
+    return out
+
+
+# ---------------------------------------------------------------- auslesen
+def _collect(year, month):
+    import gi
+    gi.require_version("EDataServer", "1.2")
+    gi.require_version("ECal", "2.0")
+    from gi.repository import ECal, EDataServer
+    from dateutil.rrule import rrulestr
+
+    monate = _monatsliste(year, month)
+    (j0, m0), (j1, m1) = monate[0], monate[-1]
+    start = datetime(j0, m0, 1, tzinfo=timezone.utc)
+    period_end = datetime(j1 + (m1 == 12), m1 % 12 + 1, 1, tzinfo=timezone.utc)
+    # Margin, so events on the neighbouring days the grid shows come along too.
+    start_at, end_at = start - timedelta(days=10), period_end + timedelta(days=10)
+
+    sexp = ('(occur-in-time-range? (make-time "%s") (make-time "%s"))'
+            % (start_at.strftime("%Y%m%dT%H%M%SZ"), end_at.strftime("%Y%m%dT%H%M%SZ")))
+
+    reg = EDataServer.SourceRegistry.new_sync(None)
+    quellen = [s for s in reg.list_sources(EDataServer.SOURCE_EXTENSION_CALENDAR)
+               if s.get_enabled()]
+
+    calendars, days = [], {}
+
+    for i, quelle in enumerate(quellen):
+        name = quelle.get_display_name()
+        colour = COLOURS[i % len(COLOURS)]
+        calendars.append({"name": name, "colour": colour})
+        try:
+            client = ECal.Client.connect_sync(
+                quelle, ECal.ClientSourceType.EVENTS, 10, None)
+            ok, comps = client.get_object_list_as_comps_sync(sexp, None)
+            if not ok:
+                continue
+        except Exception:
+            # A calendar that happens to be unreachable must not take the
+            # others down with it.
+            continue
+
+        for comp in comps or []:
+            try:
+                _add_event(comp, name, colour, start_at, end_at, days, rrulestr)
+            except Exception:
+                continue
+
+    for liste in days.values():
+        liste.sort(key=lambda e: (not e["allday"], e["time"], e["title"]))
+
+    # Split by month and write one file each.
+    stamp = int(time.time())
+    ergebnis = None
+    for (jj, mm) in monate:
+        prefix = f"{jj:04d}-{mm:02d}"
+        # Every month also gets the edge days of its neighbours, because the
+        # grid displays them.
+        eigene = {t: v for t, v in days.items()
+                  if _gehoert_zu(t, jj, mm)}
+        block = {"month": prefix, "calendars": calendars,
+                 "days": eigene, "stamp": stamp}
+        _write(cache_path(jj, mm), block)
+        if jj == year and mm == month:
+            ergebnis = block
+
+    # Drop months outside the window, otherwise files accumulate over time that
+    # will never be read again.
+    gueltig = {cache_path(jj, mm) for (jj, mm) in monate}
+    import glob as _glob
+    for alt in _glob.glob(os.path.join(CACHE_DIR, "hypr-calendar-*.json")):
+        if alt not in gueltig:
+            try:
+                os.remove(alt)
+            except OSError:
+                pass
+
+    return ergebnis or {"month": f"{year:04d}-{month:02d}",
+                        "calendars": calendars, "days": {}, "stamp": stamp}
+
+
+def _gehoert_zu(day, year, month):
+    """Is `day` inside the month's display grid, edge days included?"""
+    d = datetime.strptime(day, "%Y-%m-%d")
+    erster = datetime(year, month, 1)
+    letzter = datetime(year + (month == 12), month % 12 + 1, 1) - timedelta(days=1)
+    return (erster - timedelta(days=7)) <= d <= (letzter + timedelta(days=7))
+
+
+def _write(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.replace(tmp, path)       # atomic; never a half-written state
+
+
+def _add_event(comp, calendar_name, colour, start_at, end_at, days, rrulestr):
+    ical = comp.get_icalcomponent()
+    titel = ical.get_summary() or "(ohne Titel)"
+    dt = ical.get_dtstart()
+    if dt is None or dt.is_null_time():
+        return
+
+    ganztags = bool(dt.is_date())
+    beginn = datetime(dt.get_year(), dt.get_month(), dt.get_day(),
+                      0 if ganztags else dt.get_hour(),
+                      0 if ganztags else dt.get_minute(),
+                      tzinfo=timezone.utc)
+
+    # Read the recurrence rule out of the serialised event.
+    #
+    # Not through the object API: `get_first_property_by_kind_and_name` does not
+    # exist on ICalGLib.Component (AttributeError), and guessing the right
+    # variant costs more than searching one line of text. The serialised form is
+    # stably defined.
+    regel = None
+    m = _RRULE.search(ical.as_ical_string() or "")
+    if m:
+        regel = m.group(1).strip()
+
+    # Google-Geburtstage kommen als `FREQ=YEARLY;BYMONTHDAY=23` -- OHNE
+    # BYMONTH. Under RFC 5545, BYMONTHDAY with FREQ=YEARLY is an EXPANDING
+    # rule: without BYMONTH it applies to every month, and dateutil implements
+    # that formally correctly. The effect was a birthday on the 23rd of EVERY
+    # month in the calendar.
+    #
+    # What is obviously meant is the month from DTSTART -- which is how Google
+    # itself displays it. So when BYMONTH is missing, it is added.
+    if regel and "FREQ=YEARLY" in regel.upper() and "BYMONTH=" not in regel.upper():
+        regel = regel + ";BYMONTH=%d" % beginn.month
+
+    zeitpunkte = []
+    if regel:
+        try:
+            for tp in rrulestr(regel, dtstart=beginn):
+                if tp > end_at:
+                    break
+                if tp >= start_at:
+                    zeitpunkte.append(tp)
+        except Exception:
+            zeitpunkte = [beginn]
+    else:
+        zeitpunkte = [beginn]
+
+    eintrag_basis = {
+        "title": titel,
+        "allday": ganztags,
+        "location": ical.get_location() or "",
+        "calendar": calendar_name,
+        "colour": colour,
+    }
+
+    for tp in zeitpunkte:
+        if not (start_at <= tp <= end_at):
+            continue
+        day = tp.strftime("%Y-%m-%d")
+        e = dict(eintrag_basis)
+        e["time"] = "" if ganztags else tp.strftime("%H:%M")
+        days.setdefault(day, []).append(e)
+
+
+# ------------------------------------------------------------------- main
+def main():
+    today = datetime.now()
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    refresh = "--refresh" in sys.argv
+
+    if len(args) >= 2:
+        year, month = int(args[0]), int(args[1])
+    else:
+        year, month = today.year, today.month
+
+    path = cache_path(year, month)
+
+    if refresh:
+        try:
+            data = _collect(year, month)
+        except Exception as e:
+            data = {"month": f"{year:04d}-{month:02d}", "calendars": [],
+                     "days": {}, "stamp": int(time.time()),
+                     "error": f"{type(e).__name__}: {e}"}
+        # _collect has already written every month file; on an error at least
+        # store the month that was asked for.
+        if "error" in data:
+            _write(path, data)
+        json.dump(data, sys.stdout, ensure_ascii=False)
+        sys.stdout.write("\n")
+        return
+
+    # Normal case: return whatever is there, immediately.
+    data = {"month": f"{year:04d}-{month:02d}", "calendars": [], "days": {},
+             "stamp": 0, "loading": True}
+    age = None
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            age = time.time() - data.get("stamp", 0)
+            data["loading"] = False
+        except Exception:
+            age = None
+
+    if age is None or age > MAX_AGE:
+        # Refresh in the background. setsid so the caller does not wait.
+        subprocess.Popen(
+            ["setsid", sys.argv[0], "--refresh", str(year), str(month)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        data["loading"] = True
+
+    json.dump(data, sys.stdout, ensure_ascii=False)
+    sys.stdout.write("\n")
+
+
+if __name__ == "__main__":
+    main()

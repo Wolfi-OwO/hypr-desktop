@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Watches that the shell surfaces are actually there.
+#
+# Background: Quickshell once kept running as a process but had NOT a single
+# Layer-Surface mehr — `hyprctl layers` war leer. Sichtbar war dadurch weder
+# bar, no wallpaper and no widgets, even though `pgrep qs` reported a running
+# process. A plain process watchdog (systemd Restart=always) would not have
+# noticed, because nothing had crashed.
+#
+# The cause was never reproduced; the most likely candidate is the output
+# briefly disappearing, at which point `Variants` over `Quickshell.screens`
+# tears its children down and does not build them back up. This watchdog
+# therefore checks the VISIBLE result rather than the process.
+#
+# Started from the autostart section in hyprland.lua.
+
+set -uo pipefail
+
+INTERVALL=8
+CONFIG="$HOME/.config/quickshell"
+
+# Namespaces that must be present. If one of them is missing the shell is not
+# functional, whatever the process status says.
+ERWARTET=(quickshell-bar quickshell-widgets quickshell-wallpaper)
+
+neustart() {
+    pkill -x qs 2>/dev/null
+    sleep 2
+    setsid qs -c "$CONFIG" >/dev/null 2>&1 < /dev/null &
+    # Then wait a little longer: building the surfaces takes a few seconds, and
+    # without this the next check would fire again immediately.
+    sleep 12
+}
+
+while true; do
+    sleep "$INTERVALL"
+
+    # With no compositor running there is nothing to check.
+    hyprctl version >/dev/null 2>&1 || continue
+
+    layers=$(hyprctl layers 2>/dev/null)
+    [ -n "$layers" ] || continue             # hyprctl did not answer
+
+    fehlt=0
+    for n in "${ERWARTET[@]}"; do
+        printf '%s' "$layers" | grep -q "namespace: $n" || fehlt=1
+    done
+
+    [ "$fehlt" = 0 ] && continue
+
+    logger -t hypr-shell-guard "Shell-Flaechen fehlen, starte Quickshell neu"
+    neustart
+done

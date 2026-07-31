@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Returns the complete bar state as one JSON line.
+#
+# SUPERSEDED: the bar no longer calls this. hypr-eventd reads the same values
+# out of /proc and /sys without forking and publishes them over MQTT; see
+# ~/.local/bin/hypr-eventd. This is kept because it is still useful for a quick
+# manual check of what the bar should be showing.
+#
+# Why it was bundled in the first place: waybar started a separate process per
+# module on its own schedule. That was not only more expensive, it also drifted
+# apart -- battery, temperature and volume updated at different moments. One
+# call gives a state that is consistent with itself.
+#
+# Output (one line):
+#   {"cpu":1,"mem":"5.0","temp":57,"batt":83,"battState":"Charging",
+#    "down":"1.2kB/s","vol":45,"muted":false,"bright":60,"bt":"on",
+#    "net":"wifi|eth|off","ssid":"..."}
+
+set -uo pipefail
+
+j() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+# ---- CPU, RAM, temperature, battery ---------------------------------------
+# hypr-widget-stats already provides these as cpu|mem|temp|batt|state|up
+IFS='|' read -r CPU MEM TEMP BATT BATTST _ < <(/home/woofi/.local/bin/hypr-widget-stats 2>/dev/null)
+# Reset IFS explicitly. In bash the prefixed assignment does not reliably apply
+# to `read` alone -- when IFS stayed at '|', field splitting further down went
+# wrong and the network detection intermittently reported "off" even though the
+# default route still pointed at wlan0 unchanged.
+unset IFS
+CPU=${CPU:-0}; MEM=${MEM:-0}; TEMP=${TEMP:-0}; BATT=${BATT:-0}; BATTST=${BATTST:-Unknown}
+
+# ---- Download rate --------------------------------------------------------
+# Two samples one second apart would be too slow for a poller that itself only
+# runs every 2 s. The counter is remembered in a file between calls instead.
+IFACE=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
+DOWN="0 B/s"
+if [ -n "${IFACE:-}" ] && [ -r "/sys/class/net/$IFACE/statistics/rx_bytes" ]; then
+    NOW=$(cat "/sys/class/net/$IFACE/statistics/rx_bytes")
+    CACHE="${XDG_RUNTIME_DIR:-/tmp}/hypr-bar-rx"
+    NOW_T=$(date +%s)
+    if [ -r "$CACHE" ]; then
+        read -r OLD OLD_T < "$CACHE"
+        DT=$((NOW_T - OLD_T))
+        if [ "$DT" -gt 0 ] && [ "$NOW" -ge "$OLD" ]; then
+            RATE=$(( (NOW - OLD) / DT ))
+            if   [ "$RATE" -ge 1048576 ]; then DOWN="$((RATE / 1048576)) MB/s"
+            elif [ "$RATE" -ge 1024 ];    then DOWN="$((RATE / 1024)) kB/s"
+            else                               DOWN="$RATE B/s"
+            fi
+        fi
+    fi
+    printf '%s %s\n' "$NOW" "$NOW_T" > "$CACHE"
+fi
+
+# ---- Volume ---------------------------------------------------------------
+VOLRAW=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null)
+MUTED=false
+case "$VOLRAW" in *MUTED*) MUTED=true ;; esac
+VOL=$(printf '%s' "$VOLRAW" | grep -oE '[0-9]+\.[0-9]+' | head -1 \
+      | awk '{printf "%d", $1 * 100}')
+VOL=${VOL:-0}
+
+# ---- Brightness -----------------------------------------------------------
+BRIGHT=$(brightnessctl -m 2>/dev/null | cut -d, -f4 | tr -d '%')
+BRIGHT=${BRIGHT:-0}
+
+# ---- Bluetooth ------------------------------------------------------------
+BT=off
+bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' && BT=on
+
+# ---- Network --------------------------------------------------------------
+NET=off
+SSID=""
+if [ -n "${IFACE:-}" ]; then
+    case "$IFACE" in
+        wl*) NET=wifi
+             SSID=$(iwctl station "$IFACE" show 2>/dev/null \
+                    | awk -F'  +' '/Connected network/{print $3; exit}')
+             [ -n "$SSID" ] || SSID=$(nmcli -t -f active,ssid dev wifi 2>/dev/null \
+                    | awk -F: '$1=="yes"{print $2; exit}')
+             ;;
+        *)   NET=eth ;;
+    esac
+fi
+
+printf '{"cpu":%s,"mem":"%s","temp":%s,"batt":%s,"battState":"%s","down":"%s","vol":%s,"muted":%s,"bright":%s,"bt":"%s","net":"%s","ssid":"%s"}\n' \
+    "$CPU" "$(j "$MEM")" "$TEMP" "$BATT" "$(j "$BATTST")" "$(j "$DOWN")" \
+    "$VOL" "$MUTED" "$BRIGHT" "$BT" "$NET" "$(j "${SSID:-}")"

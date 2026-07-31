@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# GNOME "Places" dropdown equivalent: pick a location, open it in Nautilus.
+#
+# Icons use $'\U000fxxxx' ANSI-C escapes so this file stays pure ASCII —
+# literal Nerd Font glyphs get stripped in transit. Codepoints verified
+# against "FiraCode Nerd Font" with fc-match :charset=.
+set -uo pipefail
+
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/hypr-menu-lib.sh"
+
+THEME="$HOME/.config/rofi/dropdown-left.rasi"
+
+I_HOME=$'\U000f02dc'     # md-home
+I_DIR=$'\U000f0770'      # md-folder
+I_TRASH=$'\U000f05e8'    # md-trash-can
+I_DISK=$'\U000f02ca'     # md-harddisk
+
+entries=$(
+    printf '%s\t%s\n' \
+        "$I_HOME   Home"        "$HOME" \
+        "$I_DIR   Desktop"      "$(xdg-user-dir DESKTOP   2>/dev/null || echo "$HOME/Desktop")" \
+        "$I_DIR   Documents"    "$(xdg-user-dir DOCUMENTS 2>/dev/null || echo "$HOME/Documents")" \
+        "$I_DIR   Downloads"    "$(xdg-user-dir DOWNLOAD  2>/dev/null || echo "$HOME/Downloads")" \
+        "$I_DIR   Music"        "$(xdg-user-dir MUSIC     2>/dev/null || echo "$HOME/Music")" \
+        "$I_DIR   Pictures"     "$(xdg-user-dir PICTURES  2>/dev/null || echo "$HOME/Pictures")" \
+        "$I_DIR   Videos"       "$(xdg-user-dir VIDEOS    2>/dev/null || echo "$HOME/Videos")" \
+        "$I_DIR   documents"    "$HOME/documents" \
+        "$I_DIR   Config"       "$HOME/.config" \
+        "$I_DISK   Filesystem"  "/" \
+        "$I_TRASH   Trash"      "trash:///"
+)
+
+# Hide entries whose directory does not exist (keeps trash:// and /)
+available=$(
+    while IFS=$'\t' read -r label path; do
+        case "$path" in
+            trash://*|/) printf '%s\t%s\n' "$label" "$path" ;;
+            *) [ -d "$path" ] && printf '%s\t%s\n' "$label" "$path" ;;
+        esac
+    done <<< "$entries"
+)
+
+choice=$(cut -f1 <<< "$available" | rofi_left "Places") || exit 0
+[ -n "$choice" ] || exit 0
+
+target=$(awk -F'\t' -v c="$choice" '$1==c{print $2; exit}' <<< "$available")
+[ -n "$target" ] || exit 0
+
+exec nautilus --new-window "$target"

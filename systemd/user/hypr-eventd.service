@@ -1,0 +1,38 @@
+[Unit]
+Description=Desktop event bus publisher
+Documentation=file:%h/.local/bin/hypr-eventd
+# The broker has to exist before anything can publish to it. Requires, not
+# Wants: without the broker this daemon has nowhere to send anything.
+Requires=mosquitto.service
+After=mosquitto.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/hypr-eventd
+Restart=always
+RestartSec=2
+
+# Reads /proc and /sys, runs wpctl, pactl, ip, iw and nmcli. It needs no write
+# access anywhere except the broker socket in the runtime directory.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%t
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+# Measured RSS is around 16 MB, most of it the Python interpreter itself.
+# 64 MB turns a leak into a restart rather than memory pressure.
+MemoryMax=64M
+
+# This daemon exists to keep the desktop responsive, not to compete with it.
+Nice=5
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=Refresh the calendar cache periodically
+Documentation=file:%h/.local/bin/hypr-calendar
+
+[Timer]
+# First run 3 minutes after login: the login refresh has already happened by
+# then, and this only needs to catch changes made elsewhere during the session.
+OnStartupSec=3min
+OnUnitActiveSec=30min
+# Persistent so a run missed while the machine was asleep or off fires shortly
+# after it comes back, rather than waiting a full interval.
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

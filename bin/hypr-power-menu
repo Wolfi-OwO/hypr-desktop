@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Session dropdown behind the POWER icon — lock / log out / suspend /
+# restart / shut down. Power profiles and appearance live behind the battery
+# icon in hypr-battery-menu instead.
+#
+# Icons use $'\U000fxxxx' ANSI-C escapes so this file stays pure ASCII;
+# literal Nerd Font glyphs get stripped in transit.
+set -uo pipefail
+
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/hypr-menu-lib.sh"
+
+I_LOCK=$'\U000f033e'     # lock
+I_LOGOUT=$'\U000f0343'   # logout
+I_SUSPEND=$'\U000f04b2'  # sleep
+I_RESTART=$'\U000f0709'  # restart
+I_POWER=$'\U000f0425'    # power
+I_COG=$'\U000f0493'      # cog
+
+lock="$I_LOCK   Lock"
+logout="$I_LOGOUT   Log Out"
+suspend="$I_SUSPEND   Suspend"
+reboot="$I_RESTART   Restart"
+shutdown="$I_POWER   Shut Down"
+settings="$I_COG   System Settings"
+
+choice=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+    "$lock" "$logout" "$suspend" "$reboot" "$shutdown" "$settings" \
+    | rofi_right "System") || exit 0
+
+case "$choice" in
+    "$lock")     exec hyprlock ;;
+    # hyprctl dispatch evaluates LUA in 0.56, not legacy dispatcher names,
+    # so this must be the Lua call form (matches the shipped example config).
+    "$logout")   exec hyprctl dispatch 'hl.dsp.exit()' ;;
+    "$suspend")  exec systemctl suspend ;;
+    "$reboot")   exec systemctl reboot ;;
+    "$shutdown") exec systemctl poweroff ;;
+    "$settings") exec gnome-control-center ;;
+    *)           exit 0 ;;
+esac

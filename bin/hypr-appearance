@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# Switches between the light and dark appearance.
+#
+# Why a script and not just `gsettings set color-scheme`: on its own,
+# color-scheme changes nothing visible under Hyprland. Two things blocked it:
+#
+#   1. ~/.config/gtk-3.0/settings.ini and gtk-4.0/settings.ini contained
+#      gtk-application-prefer-dark-theme=0, which overrides the portal.
+#   2. Catppuccin-GnomeTheme is a fixed dark theme with no light variant.
+#      Without swapping the theme everything stays dark, whatever color-scheme
+#      says.
+#
+# So color-scheme, gtk-theme AND both settings.ini files are set together.
+#
+# Aufruf: hypr-appearance dark|light|toggle
+
+set -uo pipefail
+
+DARK_THEME="Catppuccin-GnomeTheme"
+LIGHT_THEME="WhiteSur-Light"
+
+DARK_ICONS="WhiteSur-dark"
+LIGHT_ICONS="WhiteSur"
+
+current() {
+    gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null | tr -d "'"
+}
+
+set_ini() {
+    # $1 = 0|1 for gtk-application-prefer-dark-theme
+    local want="$1"
+    for v in 3.0 4.0; do
+        local f="$HOME/.config/gtk-$v/settings.ini"
+        [ -f "$f" ] || { mkdir -p "$(dirname "$f")"; printf '[Settings]\n' > "$f"; }
+        if grep -q '^gtk-application-prefer-dark-theme' "$f"; then
+            sed -i "s|^gtk-application-prefer-dark-theme.*|gtk-application-prefer-dark-theme=$want|" "$f"
+        else
+            sed -i "/^\[Settings\]/a gtk-application-prefer-dark-theme=$want" "$f"
+        fi
+    done
+}
+
+# Lock screen. hyprlock reads its configuration only at startup, so changing
+# the file is enough -- nothing is running that would need to reload. Only the
+# block between the two markers is replaced.
+swap_hyprlock() {
+    local variant="$1"          # dark | light
+    local f="$HOME/.config/hypr/hyprlock.conf"
+    [ -f "$f" ] || return 0
+    grep -q '^### THEME-START' "$f" || return 0
+
+    local block
+    if [ "$variant" = light ]; then
+        block='$wallpaper = '"$HOME"'/.local/share/backgrounds/lock-light.png
+$base     = rgb(fdf7fc)
+$text     = rgb(241c2e)
+$subtext  = rgb(55485f)
+$mauve    = rgb(c22e7d)
+$lavender = rgb(0d6f9e)
+$inner    = rgba(255, 255, 255, 0.72)'
+    else
+        block='$wallpaper = '"$HOME"'/.local/share/backgrounds/lock-dark.png
+$base     = rgb(241d2f)
+$text     = rgb(fdf6fb)
+$subtext  = rgb(d3c5dd)
+$mauve    = rgb(f279b9)
+$lavender = rgb(5bcefa)
+$inner    = rgba(36, 29, 47, 0.75)'
+    fi
+
+    # awk rather than sed: the block is multi-line and contains characters that
+    # would have to be escaped inside a sed replacement expression.
+    awk -v blk="$block" '
+        /^### THEME-START/ { print; print blk; skip = 1; next }
+        /^### THEME-END/   { skip = 0 }
+        !skip
+    ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# Application launcher. fuzzel re-reads its configuration on every start, so
+# changing the file is enough. Only the block between the two markers is
+# replaced.
+#
+# Note: the launcher on CTRL+ALT+S is now the Quickshell applications menu,
+# which takes its colours from Theme.qml directly. This is kept because fuzzel
+# is still installed and may be invoked by hand.
+swap_fuzzel() {
+    local variant="$1"          # dark | light
+    local f="$HOME/.config/fuzzel/fuzzel.ini"
+    [ -f "$f" ] || return 0
+    grep -q '^# ### FARBEN-ANFANG' "$f" || return 0
+
+    local block
+    if [ "$variant" = light ]; then
+        block='[colors]
+background=fdf7fcf2
+text=241c2eff
+match=c22e7dff
+selection=e2d4eaff
+selection-text=241c2eff
+selection-match=c22e7dff
+border=c22e7dcc'
+    else
+        block='[colors]
+background=241d2ff2
+text=fdf6fbff
+match=f279b9ff
+selection=362c45ff
+selection-text=fdf6fbff
+selection-match=f279b9ff
+border=f279b9cc'
+    fi
+
+    awk -v blk="$block" '
+        /^# ### FARBEN-ANFANG/ { print; print blk; skip = 1; next }
+        /^# ### FARBEN-ENDE/   { skip = 0 }
+        !skip
+    ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+
+    # Symbolthema passend mitziehen.
+    if [ "$variant" = light ]; then
+        sed -i 's|^icon-theme=.*|icon-theme=WhiteSur|' "$f"
+    else
+        sed -i 's|^icon-theme=.*|icon-theme=WhiteSur-dark|' "$f"
+    fi
+}
+
+# Terminals. kitty reads its configuration only at startup, so this just sets
+# the included file. The signal that makes running instances reload is
+# deliberately NOT sent here but in phase 2 of apply(), together with every
+# other visible trigger.
+#
+# Why SIGUSR1 and not `kitty @ set-colors`: remote control appends the PID to
+# the socket name, so a fixed `--to` path never matches -- checked with
+# `ss -lx`, no matching socket existed. The signal reaches every running
+# instance and needs no open remote control channel.
+stage_terminal() {
+    local variant="$1"          # dark | light
+    local d="$HOME/.config/kitty"
+    [ -f "$d/theme-$variant.conf" ] || return 0
+    cp -f "$d/theme-$variant.conf" "$d/theme.conf"
+}
+
+# Notify Quickshell first, then set the settings: that way the shell fades at
+# the same moment as the bar, rather than up to three seconds later on its next
+# poll.
+#
+# (Since Theme.qml moved onto the event bus, hypr-eventd also publishes the
+# change within about 80 ms, so this call is now belt and braces rather than
+# the only path.)
+#
+# The wallpaper needs nothing here any more: since it moved from hyprpaper into
+# Quickshell it is bound directly to Theme.dark and cross-fades together with
+# every other surface.
+notify_shell() {
+    pgrep -x qs >/dev/null 2>&1 || return 0
+    qs ipc call theme "$1" >/dev/null 2>&1
+}
+
+# Two strictly separated phases -- this is the heart of the script.
+#
+# Everything used to run in sequence, and because every gsettings call starts a
+# process of its own, several hundred milliseconds elapsed between the first
+# step and the last. That was visible as lag: the shell had already faded while
+# the terminals followed noticeably later.
+#
+#   Phase 1  writes files only. None of it is visible, so how long it takes
+#            does not matter.
+#   Phase 2  triggers everything you can see -- all at once, each trigger in
+#            the background, followed by a `wait`. The spacing between them is
+#            therefore single-digit milliseconds rather than several hundred.
+apply() {
+    local variant="$1" scheme gtk icons ini
+    if [ "$variant" = light ]; then
+        scheme=prefer-light; gtk="$LIGHT_THEME"; icons="$LIGHT_ICONS"; ini=0
+    else
+        scheme=prefer-dark;  gtk="$DARK_THEME";  icons="$DARK_ICONS";  ini=1
+    fi
+
+    # ---- phase 1: prepare, with no visible effect yet ----
+    set_ini "$ini"
+    swap_hyprlock "$variant"
+    swap_fuzzel   "$variant"
+    stage_terminal "$variant"
+
+    # ---- phase 2: every visible trigger at once ----
+    local g=org.gnome.desktop.interface
+    notify_shell "$variant" &                              # Quickshell
+    gsettings set $g color-scheme "$scheme" &              # GTK apps, browsers
+    gsettings set $g gtk-theme    "$gtk" &
+    gsettings set $g icon-theme   "$icons" 2>/dev/null &
+    pkill -SIGUSR1 -x kitty 2>/dev/null &                  # running terminals
+    wait
+
+    echo "$variant"
+}
+
+case "${1:-toggle}" in
+    dark)  apply dark ;;
+    light) apply light ;;
+    toggle)
+        if [ "$(current)" = "prefer-dark" ]; then apply light; else apply dark; fi
+        ;;
+    status) current ;;
+    *)
+        echo "usage: hypr-appearance dark|light|toggle|status" >&2
+        exit 1
+        ;;
+esac

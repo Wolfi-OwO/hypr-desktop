@@ -1,0 +1,793 @@
+#!/usr/bin/env python3
+"""Desktop event bus publisher.
+
+Collects every piece of state the shell displays and publishes it to the local
+mosquitto broker, so anything on this machine can subscribe instead of polling.
+
+WHY THIS EXISTS
+---------------
+The bar used to call `hypr-bar-state` on a 2 s timer. That script forks around
+twenty processes per run (hypr-widget-stats, ip, cat, date, wpctl, grep, awk,
+brightnessctl, bluetoothctl, iwctl), so it could not run much faster without
+becoming the most expensive thing on the desktop -- and at 2 s a volume change
+took up to two seconds to appear.
+
+This daemon reads the same values straight out of /proc and /sys, which costs a
+few file reads and no forks at all, and it subscribes to the real event sources
+where they exist. The result is one process instead of a fork storm, and a
+worst-case staleness of one tick.
+
+DETECTION LATENCY
+-----------------
+TICK is 750 ms, the guaranteed upper bound for anything with no event source of
+its own: CPU, temperature, battery, network throughput. Everything that does
+have one is published the moment the event arrives -- measured at ~24 ms for
+volume and mute (pactl subscribe) and ~5 ms for brightness (sysfs_notify on
+actual_brightness).
+
+750 rather than 500: at 500 ms the download rate flickered, because the
+sampling window was short enough for ordinary traffic bursts to swing the
+figure between one reading and the next.
+
+TOPICS
+------
+Retained, so a subscriber that connects late gets the current value
+immediately rather than waiting for the next change:
+
+    hypr/state       the whole bar state as one object (what Bar.qml consumes)
+    hypr/audio       {"vol": 45, "muted": false}
+    hypr/brightness  {"bright": 60}
+    hypr/battery     {"batt": 83, "battState": "Charging"}
+    hypr/network     {"net": "wifi", "ssid": "...", "down": "1.2 kB/s"}
+    hypr/bluetooth   {"bt": "on"}
+    hypr/system      {"cpu": 12, "mem": "5.0", "temp": 57, "uptime": "3 hours..."}
+    hypr/theme       {"dark": true}
+    hypr/power       {"profile": "balanced"}
+    hypr/weather     the full object hypr-weather emits, refreshed every 15 min
+
+Only changed values are published. A desktop sitting idle produces no traffic.
+"""
+
+import json
+import os
+import re
+import select
+import socket
+import subprocess
+import sys
+import threading
+import time
+
+# 750 ms: the refresh budget for everything without an event source.
+#
+# This started at 500 ms and was slowed down deliberately. At 500 ms the
+# download rate was visibly jittery -- the sampling window is short enough that
+# ordinary traffic bursts swing the figure between readings, so the number
+# flickered rather than informed. 750 ms both widens the averaging window for
+# the throughput calculation and slows the redraw to something readable.
+#
+# This is NOT the latency of anything a key press or a click causes: volume,
+# mute and brightness have real event sources and are published within
+# milliseconds, independently of this tick. What it bounds is how stale a
+# sensor reading can be -- CPU, temperature, battery, network throughput --
+# none of which changes meaningfully faster than this.
+TICK = 0.75
+
+SOCKET_PATH = os.environ.get(
+    "HYPR_MQTT_SOCKET", f"/run/user/{os.getuid()}/mosquitto.sock"
+)
+
+
+# ---------------------------------------------------------------------------
+#  Minimal MQTT 3.1.1 publisher
+# ---------------------------------------------------------------------------
+# Hand-rolled rather than paho-mqtt. The client side of this bus only ever needs
+# CONNECT, PUBLISH and PINGREQ at QoS 0, which is about sixty lines; pulling in
+# a dependency for that would add several megabytes of resident set to a daemon
+# whose entire job is to be cheaper than what it replaces.
+class Mqtt:
+    def __init__(self, path, client_id="hypr-eventd"):
+        self.path = path
+        self.client_id = client_id
+        self.sock = None
+        self.lock = threading.Lock()
+
+    def _encode_len(self, n):
+        """MQTT remaining-length: 7 bits per byte, high bit as continuation."""
+        out = bytearray()
+        while True:
+            b = n % 128
+            n //= 128
+            if n:
+                b |= 0x80
+            out.append(b)
+            if not n:
+                return bytes(out)
+
+    def _str(self, s):
+        b = s.encode("utf-8")
+        return len(b).to_bytes(2, "big") + b
+
+    def connect(self):
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(5)
+        s.connect(self.path)
+
+        # Variable header: protocol name, level 4 (3.1.1), clean session,
+        # keepalive 60 s.
+        payload = self._str("MQTT") + bytes([4, 0x02]) + (60).to_bytes(2, "big")
+        payload += self._str(self.client_id)
+        s.sendall(bytes([0x10]) + self._encode_len(len(payload)) + payload)
+
+        # CONNACK: 4 bytes, the last of which is the return code.
+        ack = s.recv(4)
+        if len(ack) < 4 or ack[0] != 0x20 or ack[3] != 0:
+            s.close()
+            raise ConnectionError(f"broker refused the connection: {ack!r}")
+
+        s.settimeout(None)
+        self.sock = s
+
+    def publish(self, topic, payload, retain=True):
+        """Publish at QoS 0. Returns False if the link is down."""
+        if self.sock is None:
+            return False
+        body = self._str(topic) + payload.encode("utf-8")
+        flags = 0x30 | (0x01 if retain else 0x00)
+        pkt = bytes([flags]) + self._encode_len(len(body)) + body
+        try:
+            with self.lock:
+                self.sock.sendall(pkt)
+            return True
+        except OSError:
+            self.close()
+            return False
+
+    def ping(self):
+        if self.sock is None:
+            return False
+        try:
+            with self.lock:
+                self.sock.sendall(bytes([0xC0, 0x00]))
+            return True
+        except OSError:
+            self.close()
+            return False
+
+    def close(self):
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+            self.sock = None
+
+
+# ---------------------------------------------------------------------------
+#  Readers -- /proc and /sys only, no subprocesses
+# ---------------------------------------------------------------------------
+def read(path, default=""):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return default
+
+
+_prev_cpu = None
+
+
+def cpu_percent():
+    """Median core utilisation between two calls.
+
+    The median rather than the maximum, because a single core pinned by one
+    thread otherwise pushes the bar to 100 % while the machine is idle. Measured
+    between calls rather than across a sleep, so this returns immediately.
+    """
+    global _prev_cpu
+    cores = []
+    try:
+        with open("/proc/stat") as f:
+            for line in f:
+                if not line.startswith("cpu") or line.startswith("cpu "):
+                    continue
+                parts = line.split()
+                vals = [int(x) for x in parts[1:8]]
+                idle = vals[3] + vals[4]  # idle + iowait
+                cores.append((sum(vals), idle))
+    except OSError:
+        return 0
+
+    if _prev_cpu is None or len(_prev_cpu) != len(cores):
+        _prev_cpu = cores
+        return 0
+
+    loads = []
+    for (tot, idle), (ptot, pidle) in zip(cores, _prev_cpu):
+        dt = tot - ptot
+        di = idle - pidle
+        if dt > 0:
+            loads.append(max(0, min(100, round(100 * (dt - di) / dt))))
+    _prev_cpu = cores
+
+    if not loads:
+        return 0
+    loads.sort()
+    return loads[len(loads) // 2]
+
+
+def mem_used_gb():
+    total = avail = 0
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    total = int(line.split()[1])
+                elif line.startswith("MemAvailable:"):
+                    avail = int(line.split()[1])
+                    break
+    except OSError:
+        return "0"
+    if not total:
+        return "0"
+    return f"{(total - avail) / 1048576:.1f}"
+
+
+_temp_inputs = None
+
+
+def temperature():
+    """Median core temperature.
+
+    The package sensor (temp1_input on coretemp) tracks the hottest core, which
+    read 96 C while the cores themselves sat between 72 and 97 -- permanently
+    alarming for no reason. The median over the per-core sensors is the honest
+    number. Same reasoning as hypr-temp, which this replaces for the bar.
+    """
+    global _temp_inputs
+    if _temp_inputs is None:
+        _temp_inputs = []
+        base = "/sys/class/hwmon"
+        try:
+            for hw in os.listdir(base):
+                name = read(f"{base}/{hw}/name")
+                if name not in ("coretemp", "k10temp", "zenpower"):
+                    continue
+                for f in sorted(os.listdir(f"{base}/{hw}")):
+                    # Core sensors only: temp1_input is the package on coretemp.
+                    m = re.fullmatch(r"temp(\d+)_input", f)
+                    if m and int(m.group(1)) > 1:
+                        _temp_inputs.append(f"{base}/{hw}/{f}")
+        except OSError:
+            pass
+        # Fall back to whatever exists if no per-core sensor was found.
+        if not _temp_inputs:
+            try:
+                for hw in os.listdir(base):
+                    p = f"{base}/{hw}/temp1_input"
+                    if os.path.exists(p):
+                        _temp_inputs.append(p)
+                        break
+            except OSError:
+                pass
+
+    vals = []
+    for p in _temp_inputs:
+        v = read(p)
+        if v.isdigit():
+            vals.append(int(v) // 1000)
+    if not vals:
+        return 0
+    vals.sort()
+    return vals[len(vals) // 2]
+
+
+_bat_path = None
+
+
+def battery():
+    global _bat_path
+    if _bat_path is None:
+        base = "/sys/class/power_supply"
+        try:
+            for e in sorted(os.listdir(base)):
+                if read(f"{base}/{e}/type") == "Battery":
+                    _bat_path = f"{base}/{e}"
+                    break
+        except OSError:
+            pass
+        if _bat_path is None:
+            _bat_path = ""
+    if not _bat_path:
+        return 0, "Unknown"
+    cap = read(f"{_bat_path}/capacity", "0")
+    return (int(cap) if cap.isdigit() else 0), read(f"{_bat_path}/status", "Unknown")
+
+
+_bl_path = None
+
+
+def brightness():
+    """Backlight percentage, read straight from sysfs.
+
+    brightnessctl forks a process for the same two integers. Reading them here
+    is what makes a 500 ms tick affordable.
+    """
+    global _bl_path
+    if _bl_path is None:
+        base = "/sys/class/backlight"
+        try:
+            entries = sorted(os.listdir(base))
+            _bl_path = f"{base}/{entries[0]}" if entries else ""
+        except OSError:
+            _bl_path = ""
+    if not _bl_path:
+        return 0
+    cur = read(f"{_bl_path}/actual_brightness", "0")
+    mx = read(f"{_bl_path}/max_brightness", "0")
+    if not cur.isdigit() or not mx.isdigit() or int(mx) == 0:
+        return 0
+    return round(100 * int(cur) / int(mx))
+
+
+def default_iface():
+    """Interface of the default route, parsed from /proc/net/route.
+
+    `ip route show default` is a fork; this is the same information from the
+    file the kernel exposes it in. Destination 00000000 is the default route.
+    """
+    try:
+        with open("/proc/net/route") as f:
+            next(f, None)
+            for line in f:
+                parts = line.split()
+                if len(parts) > 1 and parts[1] == "00000000":
+                    return parts[0]
+    except OSError:
+        pass
+    return ""
+
+
+_prev_rx = None
+
+
+def down_rate(iface):
+    global _prev_rx
+    if not iface:
+        _prev_rx = None
+        return "0 B/s"
+    raw = read(f"/sys/class/net/{iface}/statistics/rx_bytes")
+    if not raw.isdigit():
+        return "0 B/s"
+    now, t = int(raw), time.monotonic()
+    if _prev_rx is None or _prev_rx[2] != iface:
+        _prev_rx = (now, t, iface)
+        return "0 B/s"
+    prev, pt, _ = _prev_rx
+    dt = t - pt
+    _prev_rx = (now, t, iface)
+    if dt <= 0 or now < prev:
+        return "0 B/s"
+    rate = int((now - prev) / dt)
+    if rate >= 1048576:
+        return f"{rate // 1048576} MB/s"
+    if rate >= 1024:
+        return f"{rate // 1024} kB/s"
+    return f"{rate} B/s"
+
+
+def uptime():
+    """Uptime in the wording the widget card already used."""
+    raw = read("/proc/uptime", "0").split()
+    try:
+        secs = int(float(raw[0]))
+    except (ValueError, IndexError):
+        return ""
+    days, rem = divmod(secs, 86400)
+    hours, rem = divmod(rem, 3600)
+    mins = rem // 60
+    if days:
+        return f"{days} days, {hours} hours"
+    if hours:
+        return f"{hours} hours, {mins} minutes"
+    return f"{mins} minutes"
+
+
+def power_profile():
+    """Active power profile, read from the kernel rather than through D-Bus.
+
+    `powerprofilesctl get` is what QuickSettings.qml used, once every 30 s.
+    power-profiles-daemon writes the same value to the ACPI platform_profile
+    attribute, so it can be read as a file on every tick without a fork.
+    Falls back to an empty string on machines that do not expose it, and the
+    consumer then keeps whatever it had.
+    """
+    return read("/sys/firmware/acpi/platform_profile")
+
+
+def bluetooth_on():
+    """Bluetooth power state from rfkill.
+
+    `bluetoothctl show | grep Powered` is a fork of an interactive tool. rfkill
+    exposes the same soft-block state as a one-byte file.
+    """
+    base = "/sys/class/rfkill"
+    try:
+        for e in os.listdir(base):
+            if read(f"{base}/{e}/type") == "bluetooth":
+                # 0 = blocked, 1 = unblocked. "state" is the combined state.
+                return "on" if read(f"{base}/{e}/state") == "1" else "off"
+    except OSError:
+        pass
+    return "off"
+
+
+# ---------------------------------------------------------------------------
+#  Values that need a subprocess -- read only when an event says they changed
+# ---------------------------------------------------------------------------
+def read_volume():
+    """Volume and mute from wpctl. Called on a PipeWire event, not on a timer."""
+    try:
+        out = subprocess.run(
+            ["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return 0, False
+    muted = "MUTED" in out
+    m = re.search(r"(\d+\.\d+)", out)
+    return (round(float(m.group(1)) * 100) if m else 0), muted
+
+
+def read_ssid(iface):
+    """SSID of the connected network. Only called when the link changes."""
+    if not iface.startswith("wl"):
+        return ""
+    try:
+        out = subprocess.run(
+            ["iw", "dev", iface, "link"], capture_output=True, text=True, timeout=2
+        ).stdout
+        m = re.search(r"^\s*SSID:\s*(.+)$", out, re.M)
+        if m:
+            return m.group(1).strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        out = subprocess.run(
+            ["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"],
+            capture_output=True, text=True, timeout=3,
+        ).stdout
+        for line in out.splitlines():
+            if line.startswith("yes:"):
+                return line.split(":", 1)[1]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ""
+
+
+# ---------------------------------------------------------------------------
+#  Event sources
+# ---------------------------------------------------------------------------
+class EventFlags:
+    """Set by the watcher threads, consumed by the main loop.
+
+    Threads only ever set flags to True and the main loop only ever clears
+    them, so a lock would protect nothing that the GIL does not already.
+
+    `woke` is what makes the event sources actually fast. Setting a flag alone
+    is not enough: the main loop would still sit in its sleep until the next
+    tick, so a volume change measured 492 ms end to end -- exactly the tick,
+    with none of the benefit of having subscribed to PipeWire at all. Setting
+    this Event as well cuts the sleep short, which takes the same measurement
+    to single-digit milliseconds. The 500 ms tick then only bounds the values
+    that have no event source.
+    """
+
+    def __init__(self):
+        self.audio = True   # start True so the first tick reads everything
+        self.network = True
+        self.theme = True
+        self.woke = threading.Event()
+
+    def signal(self, which):
+        setattr(self, which, True)
+        self.woke.set()
+
+
+def watch_audio(flags, stop):
+    """`pactl subscribe` writes one line per PipeWire change.
+
+    Filtered to sink and server events: client events fire on every program
+    start and would make this wake up for nothing.
+    """
+    while not stop.is_set():
+        try:
+            p = subprocess.Popen(
+                ["pactl", "subscribe"], stdout=subprocess.PIPE, text=True
+            )
+        except OSError:
+            time.sleep(5)
+            continue
+        try:
+            for line in p.stdout:
+                if stop.is_set():
+                    break
+                if "sink" in line or "server" in line:
+                    flags.signal("audio")
+        except (OSError, ValueError):
+            pass
+        finally:
+            p.terminate()
+            try:
+                p.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                p.kill()
+        if not stop.is_set():
+            time.sleep(2)  # pactl died; back off before retrying
+
+
+def watch_brightness(flags, stop):
+    """Wake on backlight changes through sysfs_notify.
+
+    `actual_brightness` supports poll(POLLPRI): the driver calls sysfs_notify()
+    on every change, so waiting on it costs nothing until something actually
+    moves. Verified on this machine's intel_backlight -- a poll armed before a
+    `brightnessctl set` returned within a millisecond of the write.
+
+    Not every backlight driver implements this. If poll never fires, the 500 ms
+    tick still picks the change up, so this is an optimisation rather than the
+    only path.
+    """
+    base = "/sys/class/backlight"
+    try:
+        entries = sorted(os.listdir(base))
+    except OSError:
+        return
+    if not entries:
+        return
+    path = f"{base}/{entries[0]}/actual_brightness"
+
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        poller = select.poll()
+        poller.register(fd, select.POLLPRI | select.POLLERR)
+        # An initial read is required to arm the notification.
+        os.read(fd, 32)
+        while not stop.is_set():
+            if poller.poll(1000):
+                os.lseek(fd, 0, os.SEEK_SET)
+                os.read(fd, 32)
+                flags.woke.set()
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def watch_theme(flags, stop):
+    """Light/dark switching, straight from the setting that decides it.
+
+    `gsettings monitor` blocks and prints a line whenever the key changes, so
+    this costs nothing until someone actually switches. Theme.qml used to run
+    `gsettings get` on a 3 s timer instead, which meant the shell surfaces
+    could lag up to three seconds behind the GTK applications -- the whole
+    desktop appeared to change theme in stages.
+    """
+    while not stop.is_set():
+        try:
+            p = subprocess.Popen(
+                ["gsettings", "monitor", "org.gnome.desktop.interface", "color-scheme"],
+                stdout=subprocess.PIPE, text=True,
+            )
+        except OSError:
+            time.sleep(5)
+            continue
+        try:
+            for _ in p.stdout:
+                if stop.is_set():
+                    break
+                flags.signal("theme")
+        except (OSError, ValueError):
+            pass
+        finally:
+            p.terminate()
+            try:
+                p.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                p.kill()
+        if not stop.is_set():
+            time.sleep(2)
+
+
+def read_theme():
+    try:
+        out = subprocess.run(
+            ["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+            capture_output=True, text=True, timeout=3,
+        ).stdout.strip().strip("'")
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return "dark" in out.lower()
+
+
+def watch_weather(mqtt, stop):
+    """Weather, refreshed in the background and published retained.
+
+    Its own thread because a network fetch can block for the full HTTP timeout,
+    and the main loop must never stall behind one -- everything else on the bus
+    would go stale for as long as the connection hangs.
+
+    Retained is the point: the widget gets the last reading the instant it
+    subscribes, so a fresh login shows real weather on the first frame rather
+    than placeholders. Same reasoning as moving the caches to ~/.cache.
+    """
+    interval = 900  # Open-Meteo updates roughly every 15 minutes
+    while not stop.is_set():
+        try:
+            out = subprocess.run(
+                [os.path.expanduser("~/.local/bin/hypr-weather")],
+                capture_output=True, text=True, timeout=30,
+            ).stdout.strip()
+            if out:
+                # Published straight through: hypr-weather already emits the
+                # exact JSON object the widget consumes.
+                mqtt.publish("hypr/weather", out)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        stop.wait(interval)
+
+
+def watch_network(flags, stop):
+    """`ip monitor` reports link, address and route changes as they happen.
+
+    This is what turns a Wi-Fi reconnect from "up to 500 ms late" into
+    "immediate", and it is also the trigger for re-reading the SSID, which is
+    the one network value that still costs a fork.
+    """
+    while not stop.is_set():
+        try:
+            p = subprocess.Popen(
+                ["ip", "monitor", "link", "address", "route"],
+                stdout=subprocess.PIPE, text=True,
+            )
+        except OSError:
+            time.sleep(5)
+            continue
+        try:
+            for _ in p.stdout:
+                if stop.is_set():
+                    break
+                flags.signal("network")
+        except (OSError, ValueError):
+            pass
+        finally:
+            p.terminate()
+            try:
+                p.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                p.kill()
+        if not stop.is_set():
+            time.sleep(2)
+
+
+# ---------------------------------------------------------------------------
+#  Main loop
+# ---------------------------------------------------------------------------
+def main():
+    mqtt = Mqtt(SOCKET_PATH)
+    flags = EventFlags()
+    stop = threading.Event()
+
+    for target in (watch_audio, watch_network, watch_brightness, watch_theme):
+        threading.Thread(target=target, args=(flags, stop), daemon=True).start()
+
+    # Takes the broker rather than the flags: it publishes on its own schedule
+    # instead of asking the main loop to do it.
+    threading.Thread(target=watch_weather, args=(mqtt, stop), daemon=True).start()
+
+    # Last published payload per topic. Publishing only on change is what keeps
+    # an idle desktop completely silent on the bus.
+    last = {}
+    vol, muted = 0, False
+    dark = True
+    ssid, iface = "", ""
+    last_ping = time.monotonic()
+
+    def send(topic, obj):
+        payload = json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+        if last.get(topic) == payload:
+            return
+        if mqtt.publish(topic, payload):
+            last[topic] = payload
+
+    while True:
+        started = time.monotonic()
+
+        if mqtt.sock is None:
+            try:
+                mqtt.connect()
+                # A reconnect means the broker may have restarted and lost the
+                # retained values, so forget what was sent and republish all.
+                last.clear()
+            except (OSError, ConnectionError):
+                time.sleep(2)
+                continue
+
+        if flags.audio:
+            flags.audio = False
+            vol, muted = read_volume()
+
+        if flags.theme:
+            flags.theme = False
+            dark = read_theme()
+
+        if flags.network:
+            flags.network = False
+            iface = default_iface()
+            ssid = read_ssid(iface)
+        else:
+            # The default route can change without ip monitor saying anything
+            # useful (a VPN going up, for instance), and this read is a single
+            # file, so it is checked every tick regardless.
+            new_iface = default_iface()
+            if new_iface != iface:
+                iface = new_iface
+                ssid = read_ssid(iface)
+
+        cpu = cpu_percent()
+        mem = mem_used_gb()
+        temp = temperature()
+        batt, batt_state = battery()
+        bright = brightness()
+        down = down_rate(iface)
+        bt = bluetooth_on()
+        net = "off" if not iface else ("wifi" if iface.startswith("wl") else "eth")
+
+        # Per-signal topics, so a subscriber can take just the one it cares
+        # about and never wake for the rest.
+        send("hypr/audio", {"vol": vol, "muted": muted})
+        send("hypr/brightness", {"bright": bright})
+        send("hypr/battery", {"batt": batt, "battState": batt_state})
+        send("hypr/network", {"net": net, "ssid": ssid, "down": down})
+        send("hypr/bluetooth", {"bt": bt})
+        send("hypr/system", {"cpu": cpu, "mem": mem, "temp": temp, "uptime": uptime()})
+        send("hypr/theme", {"dark": dark})
+        send("hypr/power", {"profile": power_profile()})
+
+        # The combined object, in exactly the shape hypr-bar-state produced, so
+        # Bar.qml needed no change to its parsing when it moved onto the bus.
+        send("hypr/state", {
+            "cpu": cpu, "mem": mem, "temp": temp,
+            "batt": batt, "battState": batt_state,
+            "down": down, "vol": vol, "muted": muted,
+            "bright": bright, "bt": bt, "net": net, "ssid": ssid,
+        })
+
+        # Keepalive is 60 s; ping well inside that so the broker never drops us
+        # during a long idle stretch with no state changes.
+        now = time.monotonic()
+        if now - last_ping > 20:
+            mqtt.ping()
+            last_ping = now
+
+        # Wait out the remainder of the tick, but return the instant a watcher
+        # thread signals. Waiting on the Event rather than sleeping is what
+        # makes an event-driven value arrive in milliseconds instead of on the
+        # next tick; the timeout is what still bounds everything else at TICK.
+        #
+        # The remainder is computed from `started` rather than sleeping a flat
+        # TICK, so one slow read -- a stalled wpctl, say -- does not push every
+        # later tick late.
+        elapsed = time.monotonic() - started
+        flags.woke.wait(timeout=max(0.02, TICK - elapsed))
+        flags.woke.clear()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(0)

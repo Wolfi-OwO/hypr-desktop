@@ -1,0 +1,29 @@
+#!/bin/sh
+# Starts the GNOME settings under Hyprland.
+#
+# BACKGROUND
+# `gnome-control-center` exits again immediately under Hyprland with
+#
+#     Running gnome-control-center is only supported under GNOME and Unity, exiting
+#
+# and it does so with exit status 0 -- so it does not even look like a failure,
+# nothing simply happens. The check lives in is_supported_desktop() in main.c
+# and reads XDG_CURRENT_DESKTOP.
+#
+# THE FIX
+# XDG_CURRENT_DESKTOP is a colon-separated LIST. With Hyprland first and GNOME
+# behind it, both are satisfied:
+#
+#   gnome-control-center  searches the list for GNOME -> finds it, starts
+#   xdg-desktop-portal    takes the FIRST match       -> hyprland-portals.conf
+#
+# Setting only `XDG_CURRENT_DESKTOP=GNOME` would also start the settings, but it
+# would at the same time redirect every portal call this program makes (file
+# chooser, wallpaper) to xdg-desktop-portal-gnome. The ordering here avoids
+# that.
+#
+# Used from two places:
+#   ~/.local/share/applications/org.gnome.Settings.desktop  (application menu)
+#   ~/.config/quickshell/QuickSettings.qml                  ("Settings" button)
+
+exec env XDG_CURRENT_DESKTOP=Hyprland:GNOME /usr/bin/gnome-control-center "$@"

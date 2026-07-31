@@ -1,0 +1,42 @@
+[Unit]
+Description=Mosquitto MQTT broker (desktop event bus)
+Documentation=man:mosquitto.conf(5)
+# Nothing else may create the socket path, and the shell needs the broker
+# before it starts subscribing.
+After=graphical-session-pre.target
+PartOf=graphical-session.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/mosquitto -c %h/.config/mosquitto/mosquitto.conf
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=1
+
+# The broker needs no filesystem access beyond its socket and no privileges at
+# all. Every one of these is a capability it would otherwise inherit from the
+# user session for no reason.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%t
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+# Hard stop well above the broker's own memory_limit, so a leak anywhere in the
+# process -- not just in mosquitto's own accounting -- is still bounded.
+MemoryMax=48M
+
+[Install]
+WantedBy=graphical-session.target

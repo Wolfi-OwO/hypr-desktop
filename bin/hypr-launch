@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Starts an application -- or raises it if it is already running.
+#
+# Behaves as GNOME does: if the app is already open, this switches to its
+# workspace, focuses the window and brings it to the front instead of starting a
+# second instance.
+#
+# Usage: hypr-launch <wmclass> <exec-command>
+#   <wmclass> may be empty, in which case it is guessed from the exec name.
+
+set -uo pipefail
+
+WMCLASS="${1:-}"
+shift 2>/dev/null || true
+EXEC="${*:-}"
+
+[ -n "$EXEC" ] || { echo "usage: hypr-launch <wmclass> <exec>" >&2; exit 1; }
+
+# When no WM class is known: the first word of the exec command, without path.
+if [ -z "$WMCLASS" ]; then
+    WMCLASS=$(printf '%s' "$EXEC" | awk '{print $1}' | xargs -r basename 2>/dev/null)
+fi
+
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+NEEDLE=$(lower "$WMCLASS")
+
+# Find a matching, visible window. The comparison runs against class and
+# initialClass, both lower-cased and as a substring -- Brave reports
+# "brave-browser", for instance, while the .desktop file says "brave".
+# Note: do NOT write "$n | contains(.class)" -- inside that expression "." is
+# the string $n, not the window, and jq aborts with "Cannot index string with
+# string". Bind the classes to variables first.
+ADDR=$(hyprctl clients -j 2>/dev/null | jq -r --arg n "$NEEDLE" '
+    [ .[]
+      | select(.mapped == true)
+      | . as $w
+      | (($w.class // "") | ascii_downcase) as $c
+      | (($w.initialClass // "") | ascii_downcase) as $ic
+      | select(
+            ($c  != "" and ($c  | contains($n))) or
+            ($ic != "" and ($ic | contains($n))) or
+            ($c  != "" and ($n  | contains($c)))
+        )
+    ]
+    | sort_by(.focusHistoryID)
+    | .[0].address // empty
+')
+
+if [ -n "$ADDR" ]; then
+    # focus also switches workspace when the window is on another one.
+    hyprctl dispatch "hl.dsp.focus({ window = \"address:$ADDR\" })" >/dev/null 2>&1
+    # Raise it as well: with overlapping windows, focus alone is not enough --
+    # the topmost one would otherwise stay visible.
+    hyprctl dispatch 'hl.dsp.window.bring_to_top()' >/dev/null 2>&1
+    exit 0
+fi
+
+# Not open -> start it.
+setsid sh -c "$EXEC" >/dev/null 2>&1 &
+exit 0

@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Waybar custom module: show at most 3 applications.
+#
+# wlr/taskbar has no way to cap how many buttons it draws, so with a dozen
+# windows open the bar filled with icons. This emits the 3 most recently
+# used windows (by focusHistoryID) as Nerd Font glyphs instead.
+#
+# Icons are built with printf '\Uxxxxxxxx' rather than literal glyphs: literal
+# Nerd Font characters get stripped in transit.
+set -uo pipefail
+
+g() { printf "\\U$(printf '%08x' "$1")"; }
+
+ICON_TERM=$(g 0x00f018d)   # console
+ICON_WEB=$(g 0x00f059f)    # web
+ICON_CODE=$(g 0x00f0169)   # code-braces
+ICON_FILES=$(g 0x00f0770)  # folder
+ICON_CHAT=$(g 0x00f0b79)   # chat
+ICON_MAIL=$(g 0x00f01f0)   # email
+ICON_MUSIC=$(g 0x00f075a)  # music
+ICON_APP=$(g 0x00f0349)    # application (fallback)
+
+icon_for() {
+    case "${1,,}" in
+        kitty|alacritty|foot|*terminal*)      printf '%s' "$ICON_TERM" ;;
+        brave*|chromium|google-chrome|firefox|zen*) printf '%s' "$ICON_WEB" ;;
+        code|codium|*jetbrains*|*studio*)     printf '%s' "$ICON_CODE" ;;
+        *nautilus*|thunar|dolphin|*files*)    printf '%s' "$ICON_FILES" ;;
+        discord|vesktop|*teams*|*slack*|*whats*) printf '%s' "$ICON_CHAT" ;;
+        *outlook*|thunderbird|*mail*)         printf '%s' "$ICON_MAIL" ;;
+        spotify|*music*|mpv|vlc)              printf '%s' "$ICON_MUSIC" ;;
+        *)                                    printf '%s' "$ICON_APP" ;;
+    esac
+}
+
+# Thin space between a glyph and its count; wider gap between app entries.
+SEP=$(printf '\u2009')     # U+2009 THIN SPACE
+GAP=$(printf '   ')         # three spaces between apps
+
+clients=$(hyprctl clients -j 2>/dev/null) || { echo '{"text":""}'; exit 0; }
+
+# 3 most recently focused apps. Windows are GROUPED by application first:
+# Brave spawns one client per PWA (brave-mjoklpl..., brave-cifhbc..., etc.),
+# which otherwise filled every slot with the same browser. Normalising the
+# class collapses them into a single "Brave" entry.
+mapfile -t rows < <(printf '%s' "$clients" | jq -r '
+    def appkey:
+        (.class // "") | ascii_downcase
+        | if startswith("brave") then "brave"
+          elif startswith("chromium") or startswith("google-chrome") then "chromium"
+          elif startswith("code") or startswith("codium") then "code"
+          elif test("jetbrains") then "jetbrains"
+          else . end;
+    [ .[]
+      | select(.mapped == true)
+      | select((.class | ascii_downcase | test("ulauncher|rofi")) | not)
+      | select(.workspace.name | startswith("special:minimized") | not)
+    ]
+    | sort_by(.focusHistoryID)
+    | group_by(appkey)
+    | map({ k: (.[0] | appkey),
+            n: length,
+            first: (sort_by(.focusHistoryID) | .[0]) })
+    | sort_by(.first.focusHistoryID)
+    | .[0:3][]
+    | "\(.k)\t\(.first.title)\t\(.n)"
+')
+
+total=$(printf '%s' "$clients" | jq -r '[.[]|select(.mapped==true)]|length')
+
+text=""
+tooltip=""
+shown=0
+for row in "${rows[@]}"; do
+    IFS=$'\t' read -r cls title n <<< "$row"
+    [ -n "$cls" ] || continue
+    text+="$(icon_for "$cls")"
+    # A grouped app shows how many windows it has, e.g. Brave with 6 PWAs.
+    # The count needs a real separator: appending the digit straight onto the
+    # glyph made them overlap, because Nerd Font icons are full-width and the
+    # digit was drawn into the same cell.
+    if [ "${n:-1}" -gt 1 ] 2>/dev/null; then
+        text+="$SEP$n"
+        tooltip+="${title:0:55} (+$((n - 1)) more)"$'\n'
+    else
+        tooltip+="${title:0:60}"$'\n'
+    fi
+    text+="$GAP"
+    shown=$((shown + n))
+done
+
+# Anything not covered by the 3 app groups shown.
+if [ "$total" -gt "$shown" ] 2>/dev/null; then
+    text+="+$((total - shown))"
+    tooltip+="$((total - shown)) more (click to switch)"
+fi
+
+text=${text%%*( )}
+printf '{"text":"%s","tooltip":"%s","class":"taskbar"}\n' \
+    "$(printf '%s' "$text" | sed 's/"/\\"/g')" \
+    "$(printf '%s' "$tooltip" | sed 's/"/\\"/g; s/$/\\n/' | tr -d '\n' | sed 's/\\n$//')"

@@ -1,0 +1,11 @@
+# Sobald eine qmldir existiert, werden Geschwisterdateien NICHT mehr
+# automatisch als Komponenten erkannt — deshalb muessen hier alle stehen.
+singleton Theme 1.0 Theme.qml
+NotificationCenter 1.0 NotificationCenter.qml
+QuickSettings 1.0 QuickSettings.qml
+Menus 1.0 Menus.qml
+Controls 1.0 Controls.qml
+AltTab 1.0 AltTab.qml
+Bar 1.0 Bar.qml
+Pill 1.0 Pill.qml
+TextButton 1.0 TextButton.qml

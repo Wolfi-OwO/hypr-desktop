@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Median core temperature, for waybar.
+#
+# waybar's temperature module reads temp1_input from coretemp -- that is the
+# PACKAGE temperature, which in practice tracks the hottest core. Measured:
+# cores at 72..97 C while temp1_input reported 96. That makes the reading look
+# permanently alarming even though most cores are considerably cooler.
+#
+# This takes the median across all core sensors instead.
+
+set -uo pipefail
+
+vals=()
+for f in /sys/devices/platform/coretemp.0/hwmon/hwmon*/temp*_input; do
+    [ -f "$f" ] || continue
+    lbl=$(cat "${f%_input}_label" 2>/dev/null || echo "")
+    case "$lbl" in
+        Core*) vals+=( $(( $(cat "$f") / 1000 )) ) ;;
+    esac
+done
+
+if [ "${#vals[@]}" -eq 0 ]; then
+    # Fallback to the package sensor if there are no per-core sensors
+    t=$(cat /sys/devices/platform/coretemp.0/hwmon/hwmon*/temp1_input 2>/dev/null | head -1)
+    med=$(( ${t:-0} / 1000 ))
+    max=$med
+else
+    mapfile -t sorted < <(printf '%s\n' "${vals[@]}" | sort -n)
+    n=${#sorted[@]}
+    mid=$((n / 2))
+    if [ $((n % 2)) -eq 1 ]; then
+        med=${sorted[$mid]}
+    else
+        med=$(( (sorted[mid - 1] + sorted[mid]) / 2 ))
+    fi
+    max=${sorted[$((n - 1))]}
+fi
+
+# class drives the colouring in waybar; only warn at a genuinely high median
+cls="normal"
+[ "$med" -ge 80 ] && cls="warm"
+[ "$med" -ge 90 ] && cls="critical"
+
+printf '{"text":"%s°C","tooltip":"Median %s°C · heissester Kern %s°C · %s Kerne","class":"%s"}\n' \
+    "$med" "$med" "$max" "${#vals[@]}" "$cls"
