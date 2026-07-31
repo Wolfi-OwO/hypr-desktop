@@ -14,6 +14,11 @@ Scope {
     id: ctl
 
     property string active: ""        // "brightness" | "volume" | "bluetooth" | ""
+
+    // Horizontal centre of the bar icon that opened this panel, in bar
+    // coordinates. -1 falls back to the right edge, which is where all three
+    // panels used to be pinned regardless of which icon was clicked.
+    property real anchorX: -1
     readonly property int barHeight: 40
 
     property int brightness: 50
@@ -28,13 +33,19 @@ Scope {
     // brightness panel.
     IpcHandler {
         target: "controls"
+        // The bare forms stay for keybindings and manual `qs ipc call`, where
+        // there is no trigger to anchor to; the *At forms take the icon centre.
         function showBrightness(): void { ctl.openPanel("brightness"); }
         function showVolume(): void     { ctl.openPanel("volume"); }
         function showBluetooth(): void  { ctl.openPanel("bluetooth"); }
+        function brightnessAt(x: real): void { ctl.openPanel("brightness", x); }
+        function volumeAt(x: real): void     { ctl.openPanel("volume", x); }
+        function bluetoothAt(x: real): void  { ctl.openPanel("bluetooth", x); }
         function hide(): void           { ctl.active = ""; }
     }
 
-    function openPanel(which) {
+    function openPanel(which, centreX) {
+        ctl.anchorX = (centreX === undefined || centreX === null) ? -1 : centreX;
         if (ctl.active === which) { ctl.active = ""; return; }
         ctl.active = which;
         readBrightness.running = true;
@@ -146,13 +157,20 @@ Scope {
 
             opacity: ctl.active !== "" ? 1 : 0
             scale: ctl.active !== "" ? 1 : 0.94
-            transformOrigin: Item.TopRight
+            // Scale out of the corner nearest the icon that opened it.
+            transformOrigin: ctl.anchorX < 0
+                             ? Item.TopRight
+                             : (ctl.anchorX > ctlWin.width / 2 ? Item.TopRight : Item.TopLeft)
             Behavior on opacity { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
             Behavior on scale   { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
             y: ctl.barHeight + (ctl.active !== "" ? 4 : -6)
             Behavior on y { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
             // right-aligned; these are all icons from the right half of the bar
-            x: parent.width - width - 6
+            // Centred under the icon, clamped to the screen.
+            x: ctl.anchorX < 0
+               ? parent.width - width - 6
+               : Math.max(6, Math.min(parent.width - width - 6, ctl.anchorX - width / 2))
+            Behavior on x { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
             width: 330
             height: body.implicitHeight + 26
             radius: 20

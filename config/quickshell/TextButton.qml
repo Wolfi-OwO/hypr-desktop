@@ -15,7 +15,10 @@ Item {
 
     property string text: ""
     property bool   bold: false
-    signal activated()
+    // The x argument is the widget's horizontal centre in bar coordinates, so
+    // the panel this opens can position itself under the thing that opened it
+    // rather than at a screen edge.
+    signal activated(real centreX)
 
     implicitWidth: label.implicitWidth + 28
     implicitHeight: 40
@@ -55,6 +58,6 @@ Item {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
-        onClicked: btn.activated()
+        onClicked: btn.activated(mapToItem(null, btn.width / 2, 0).x)
     }
 }

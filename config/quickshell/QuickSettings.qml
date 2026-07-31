@@ -45,11 +45,20 @@ Scope {
     // when this file is written out.
     function ico(cp) { return String.fromCodePoint(cp); }
 
+    // Horizontal centre of the bar item that opened this, in bar coordinates.
+    // -1 keeps the old behaviour of pinning to the right edge.
+    property real anchorX: -1
+
     IpcHandler {
         target: "quicksettings"
         function toggle(): void { qs.panelOpen = !qs.panelOpen; if (qs.panelOpen) qs.refresh(); }
         function show(): void { qs.panelOpen = true; qs.refresh(); }
         function hide(): void { qs.panelOpen = false; }
+        function toggleAt(x: real): void {
+            qs.anchorX = x;
+            qs.panelOpen = !qs.panelOpen;
+            if (qs.panelOpen) qs.refresh();
+        }
     }
 
     // Nothing to refresh on demand any more: every value below arrives on the
@@ -151,8 +160,14 @@ Scope {
             transformOrigin: Item.TopRight
             Behavior on opacity { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
             Behavior on scale   { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
-            anchors.right: parent.right
+            // Centred under the trigger, clamped to the screen; falls back to
+            // the right edge when nothing told it where the trigger was.
+            anchors.right: qs.anchorX < 0 ? parent.right : undefined
             anchors.rightMargin: 6
+            x: qs.anchorX < 0
+               ? 0
+               : Math.max(6, Math.min(parent.width - width - 6, qs.anchorX - width / 2))
+            Behavior on x { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
             anchors.top: parent.top
             anchors.topMargin: qs.barHeight + (qs.panelOpen ? 4 : -6)   // just below the bar
             Behavior on anchors.topMargin { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }

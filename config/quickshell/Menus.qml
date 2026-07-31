@@ -17,6 +17,16 @@ Scope {
     id: menus
 
     property string active: ""       // "apps" | "places" | "wifi" | ""
+
+    // Horizontal centre of the bar item that opened the menu, in bar
+    // coordinates. -1 means "not told", in which case the card falls back to
+    // the left edge.
+    //
+    // Before this existed, every menu was pinned to a screen edge: apps and
+    // places to x=6, Wi-Fi to the far right. The Wi-Fi icon is nowhere near
+    // the right edge, so the list opened detached from the icon that produced
+    // it. Now the card is centred under its trigger and clamped to the screen.
+    property real anchorX: -1
     readonly property int barHeight: 40
 
     property var appList: []
@@ -26,13 +36,19 @@ Scope {
 
     IpcHandler {
         target: "menu"
-        function apps(): void   { menus.openMenu("apps"); }
-        function places(): void { menus.openMenu("places"); }
-        function wifi(): void   { menus.openMenu("wifi"); }
+        // The x variants take the trigger's centre; the bare ones stay for
+        // keybindings and manual `qs ipc call`, where there is no trigger.
+        function apps(): void         { menus.openMenu("apps"); }
+        function places(): void       { menus.openMenu("places"); }
+        function wifi(): void         { menus.openMenu("wifi"); }
+        function appsAt(x: real): void   { menus.openMenu("apps", x); }
+        function placesAt(x: real): void { menus.openMenu("places", x); }
+        function wifiAt(x: real): void   { menus.openMenu("wifi", x); }
         function hide(): void   { menus.active = ""; }
     }
 
-    function openMenu(which) {
+    function openMenu(which, centreX) {
+        menus.anchorX = (centreX === undefined || centreX === null) ? -1 : centreX;
         if (menus.active === which) { menus.active = ""; return; }
         menus.active = which;
         if (which === "apps") loadApps.running = true;
@@ -209,7 +225,11 @@ Scope {
 
             opacity: menuWin.open ? 1 : 0
             scale: menuWin.open ? 1 : 0.94
-            transformOrigin: menus.active === "wifi" ? Item.TopRight : Item.TopLeft
+            // Scale out of the corner nearest the trigger, so the motion reads
+            // as coming from the thing that was clicked.
+            transformOrigin: menus.anchorX < 0
+                             ? Item.TopLeft
+                             : (menus.anchorX > menuWin.width / 2 ? Item.TopRight : Item.TopLeft)
             Behavior on opacity { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
             Behavior on scale   { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
 
@@ -221,7 +241,13 @@ Scope {
             // anchored and the card stretched across the full screen width. An
             // explicit x is unambiguous.
             y: menus.barHeight + (menuWin.open ? 4 : -6)
-            x: menus.active === "wifi" ? parent.width - width - 6 : 6
+            // Centred under the trigger, then clamped so it never runs off
+            // either edge. Without the clamp the Wi-Fi card -- which sits far
+            // right in the bar -- would hang past the screen.
+            x: menus.anchorX < 0
+               ? 6
+               : Math.max(6, Math.min(parent.width - width - 6, menus.anchorX - width / 2))
+            Behavior on x { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
 
             Behavior on y { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
             // Switching between applications and Wi-Fi moves the card to the

@@ -152,6 +152,14 @@ Scope {
     function run(cmd) { runner.command = ["sh", "-c", cmd]; runner.running = true; }
     function ipc(target, fn) { bar.run("qs ipc call " + target + " " + fn); }
 
+    // Same, with the trigger's horizontal centre appended. Quickshell passes
+    // trailing words as the function's arguments, so `menu wifiAt 1180` calls
+    // wifiAt(1180) and the panel can place itself under the icon instead of at
+    // a screen edge.
+    function ipcAt(target, fn, centreX) {
+        bar.run("qs ipc call " + target + " " + fn + " " + Math.round(centreX));
+    }
+
     // ---- Icons ------------------------------------------------------------
     // Volume: the louder it is, the more waves on the icon.
     //
@@ -248,11 +256,11 @@ Scope {
 
                     TextButton {
                         text: "Apps"; bold: true
-                        onActivated: bar.ipc("menu", "apps")
+                        onActivated: function (cx) { bar.ipcAt("menu", "appsAt", cx); }
                     }
                     TextButton {
                         text: "Places"; bold: true
-                        onActivated: bar.ipc("menu", "places")
+                        onActivated: function (cx) { bar.ipcAt("menu", "placesAt", cx); }
                     }
 
                     // Arbeitsflaechen. Quickshell.Hyprland liefert sie
@@ -334,7 +342,7 @@ Scope {
                         mono: true
                         pixel: 14
                         colour: Theme.lavender
-                        onActivated: bar.ipc("alttab", "next")
+                        onActivated: function () { bar.ipc("alttab", "next"); }
                     }
                 }
 
@@ -388,7 +396,7 @@ Scope {
                               col: bar.temp >= 85 ? Theme.red
                                  : bar.temp >= 70 ? Theme.yellow : Theme.peach }
                         ]
-                        onActivated: bar.ipc("quicksettings", "toggle")
+                        onActivated: function (cx) { bar.ipcAt("quicksettings", "toggleAt", cx); }
                     }
 
                     // Notifications
@@ -406,14 +414,14 @@ Scope {
                     Pill {
                         icons: [
                             { ico: 0xf00b1, col: bar.bt === "on" ? Theme.blue : Theme.surface2,
-                              act: function () { bar.ipc("controls", "showBluetooth"); } },
+                              act: function (cx) { bar.ipcAt("controls", "bluetoothAt", cx); } },
                             { ico: bar.netIcon(),
                               col: bar.net === "off" ? Theme.red : Theme.sapphire,
-                              act: function () { bar.ipc("menu", "wifi"); } },
+                              act: function (cx) { bar.ipcAt("menu", "wifiAt", cx); } },
                             { ico: bar.volIcon(), col: bar.volColour(),
-                              act: function () { bar.ipc("controls", "showVolume"); } },
+                              act: function (cx) { bar.ipcAt("controls", "volumeAt", cx); } },
                             { ico: bar.brightIcon(), col: bar.brightColour(),
-                              act: function () { bar.ipc("controls", "showBrightness"); } }
+                              act: function (cx) { bar.ipcAt("controls", "brightnessAt", cx); } }
                         ]
                     }
 
@@ -428,7 +436,7 @@ Scope {
                                  : bar.batt <= 30 ? Theme.yellow : Theme.maroon },
                             { ico: 0xf0425, txt: "", col: Theme.red }
                         ]
-                        onActivated: bar.ipc("quicksettings", "toggle")
+                        onActivated: function (cx) { bar.ipcAt("quicksettings", "toggleAt", cx); }
                     }
                 }
             }

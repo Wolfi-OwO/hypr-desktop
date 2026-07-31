@@ -40,7 +40,10 @@ Item {
     property int    pixel: 13
     property color  colour: Theme.text
 
-    signal activated()
+    // The x argument is the widget's horizontal centre in bar coordinates, so
+    // the panel this opens can position itself under the thing that opened it
+    // rather than at a screen edge.
+    signal activated(real centreX)
 
     // The list is not set yet the first time the binding is evaluated, hence
     // the undefined check -- without it this throws "Cannot read property
@@ -152,7 +155,18 @@ Item {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: if (modelData.act) modelData.act()
+                        // Hand the icon's horizontal centre, in bar coordinates,
+                        // to the action. Panels used to open pinned to a screen
+                        // edge, so the Wi-Fi list appeared at the far right and
+                        // the volume slider nowhere near the speaker icon that
+                        // opened it. mapToItem(null, ...) is the bar window's own
+                        // coordinate space, which starts at x=0 and spans the
+                        // full width, so this is directly usable as a screen x.
+                        onClicked: {
+                            if (!modelData.act) return;
+                            const centre = mapToItem(null, width / 2, 0).x;
+                            modelData.act(centre);
+                        }
                     }
                 }
             }
@@ -177,6 +191,6 @@ Item {
         enabled: !pill.perIcon
         hoverEnabled: !pill.perIcon
         cursorShape: Qt.PointingHandCursor
-        onClicked: pill.activated()
+        onClicked: pill.activated(mapToItem(null, pill.width / 2, 0).x)
     }
 }
