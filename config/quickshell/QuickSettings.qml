@@ -82,6 +82,25 @@ Scope {
     // and there is nothing to wait for.
     Process {
         id: busSub
+
+        // A subscription that exits must come back.
+
+        //
+
+        // Quickshell does not restart a Process on its own, so when mosquitto_sub
+
+        // exited -- because the broker restarted, or simply because the shell won
+
+        // the race against it at login -- the subscription stayed dead for the whole
+
+        // session. The panel then kept showing its last received values forever,
+
+        // with no error anywhere. That is what froze the whole shell after the
+
+        // broker was restarted.
+
+        onExited: reconnect.start()
+
         running: true
         command: ["mosquitto_sub",
                   "--unix", "/run/user/1000/mosquitto.sock",
@@ -101,6 +120,14 @@ Scope {
             }
         }
     }
+
+    Timer {
+        id: reconnect
+        interval: 1000
+        repeat: false
+        onTriggered: busSub.running = true
+    }
+
 
     Process { id: runner }
     function run(cmd) {

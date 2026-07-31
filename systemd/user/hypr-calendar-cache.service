@@ -3,8 +3,7 @@ Description=Calendar cache: warm at login, save before shutdown
 Documentation=file:%h/.local/bin/hypr-calendar
 # The Evolution data server is what this reads from, so there is no point
 # starting before the session it belongs to.
-After=graphical-session-pre.target
-PartOf=graphical-session.target
+# See mosquitto.service: graphical-session.target never activates here.
 
 [Service]
 # RemainAfterExit is what makes ExecStop meaningful: without it the unit is
@@ -37,4 +36,4 @@ TimeoutStartSec=180
 TimeoutStopSec=90
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=default.target

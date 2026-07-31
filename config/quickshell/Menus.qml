@@ -77,6 +77,25 @@ Scope {
     // before the menu is opened. Opening it now costs nothing at all.
     Process {
         id: loadApps
+
+        // A subscription that exits must come back.
+
+        //
+
+        // Quickshell does not restart a Process on its own, so when mosquitto_sub
+
+        // exited -- because the broker restarted, or simply because the shell won
+
+        // the race against it at login -- the subscription stayed dead for the whole
+
+        // session. The panel then kept showing its last received values forever,
+
+        // with no error anywhere. That is what froze the whole shell after the
+
+        // broker was restarted.
+
+        onExited: reconnect.start()
+
         running: true
         command: ["mosquitto_sub",
                   "--unix", "/run/user/1000/mosquitto.sock",
@@ -88,6 +107,42 @@ Scope {
                     const d = JSON.parse(line.trim());
                     if (d && d.apps) menus.appList = d.apps;
                 } catch (e) { /* keep the list we already have */ }
+            }
+        }
+    }
+
+    Timer {
+        id: reconnect
+        interval: 1000
+        repeat: false
+        onTriggered: loadApps.running = true
+    }
+
+
+    // The cache file, read once at startup, BEFORE the bus is consulted.
+    //
+    // The bus is the live path, but it is not the guaranteed one: the broker is
+    // a separate service, and if it is slow, down, or restarted, a
+    // bus-only menu is an empty menu -- which is exactly what happened, and why
+    // CTRL+ALT+S stopped finding anything. hypr-applist keeps its own cache in
+    // ~/.cache/hypr, so the list can always be loaded from disk in a few
+    // milliseconds with nothing else running.
+    //
+    // Whatever the bus delivers afterwards replaces this. Reading the file
+    // costs one process at startup and removes the shell's dependency on the
+    // broker being up for the launcher to work at all.
+    Process {
+        id: appsFromFile
+        running: true
+        command: ["/home/woofi/.local/bin/hypr-applist"]
+        stdout: StdioCollector {
+            onStreamFinished: {
+                // Only if the bus has not already provided a newer list.
+                if (menus.appList.length > 0) return;
+                try {
+                    const d = JSON.parse(this.text.trim());
+                    if (d && d.apps) menus.appList = d.apps;
+                } catch (e) { /* the bus is the other path */ }
             }
         }
     }

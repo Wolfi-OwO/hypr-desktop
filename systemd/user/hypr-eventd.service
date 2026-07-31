@@ -5,7 +5,8 @@ Documentation=file:%h/.local/bin/hypr-eventd
 # Wants: without the broker this daemon has nowhere to send anything.
 Requires=mosquitto.service
 After=mosquitto.service
-PartOf=graphical-session.target
+# See mosquitto.service: graphical-session.target never activates under
+# Hyprland, so this must not depend on it.
 
 [Service]
 Type=simple
@@ -35,4 +36,4 @@ MemoryMax=64M
 Nice=5
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=default.target

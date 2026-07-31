@@ -303,6 +303,25 @@ ShellRoot {
             // wake for the other's changes.
             Process {
                 id: stats
+
+                // A subscription that exits must come back.
+
+                //
+
+                // Quickshell does not restart a Process on its own, so when mosquitto_sub
+
+                // exited -- because the broker restarted, or simply because the shell won
+
+                // the race against it at login -- the subscription stayed dead for the whole
+
+                // session. The panel then kept showing its last received values forever,
+
+                // with no error anywhere. That is what froze the whole shell after the
+
+                // broker was restarted.
+
+                onExited: reconnectStats.start()
+
                 running: true
                 command: ["mosquitto_sub",
                           "--unix", "/run/user/1000/mosquitto.sock",
@@ -326,8 +345,78 @@ ShellRoot {
                 }
             }
 
+            Timer {
+                id: reconnectStats
+                interval: 1000
+                repeat: false
+                onTriggered: stats.running = true
+            }
+
+
+            // The cached reading, straight off disk at startup.
+
+
+            //
+
+
+            // Same reasoning as the application list: the bus is the live path but not
+
+
+            // a guaranteed one, and a weather card that depends on the broker being up
+
+
+            // shows dashes when it is not. hypr-weather serves its own cache from
+
+
+            // ~/.cache/hypr immediately, without touching the network.
+
+
+            Process {
+
+
+                id: weatherFromFile
+
+
+                running: true
+
+
+                command: ["/home/woofi/.local/bin/hypr-weather"]
+
+
+                stdout: StdioCollector {
+
+
+                    onStreamFinished: {
+
+
+                        if (root.wx && root.wx.place) return;   // the bus got there first
+
+
+                        try {
+
+
+                            const d = JSON.parse(this.text);
+
+
+                            if (d && d.place) root.wx = d;
+
+
+                        } catch (e) { /* the bus is the other path */ }
+
+
+                    }
+
+
+                }
+
+
+            }
+
+
+
             Process {
                 id: weather
+
 
                 // Subscribed, not fetched on a 300 s timer.
                 //
@@ -336,6 +425,15 @@ ShellRoot {
                 // buys here is the retained message: it arrives the instant
                 // this subscribes, so the card shows a real reading on the
                 // first frame after login instead of the placeholder dashes.
+                // A subscription that exits must come back.
+                //
+                // Quickshell does not restart a Process on its own, so when mosquitto_sub
+                // exited -- because the broker restarted, or simply because the shell won
+                // the race against it at login -- the subscription stayed dead for the whole
+                // session. The panel then kept showing its last received values forever,
+                // with no error anywhere. That is what froze the whole shell after the
+                // broker was restarted.
+                onExited: reconnectWeather.start()
                 running: true
                 command: ["mosquitto_sub",
                           "--unix", "/run/user/1000/mosquitto.sock",
@@ -350,6 +448,14 @@ ShellRoot {
                     }
                 }
             }
+
+            Timer {
+                id: reconnectWeather
+                interval: 1000
+                repeat: false
+                onTriggered: weather.running = true
+            }
+
 
 
 

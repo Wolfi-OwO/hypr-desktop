@@ -72,6 +72,25 @@ Scope {
     // actual_brightness for brightness. Measured end to end at ~24 ms and ~5 ms.
     Process {
         id: liveState
+
+        // A subscription that exits must come back.
+
+        //
+
+        // Quickshell does not restart a Process on its own, so when mosquitto_sub
+
+        // exited -- because the broker restarted, or simply because the shell won
+
+        // the race against it at login -- the subscription stayed dead for the whole
+
+        // session. The panel then kept showing its last received values forever,
+
+        // with no error anywhere. That is what froze the whole shell after the
+
+        // broker was restarted.
+
+        onExited: reconnect.start()
+
         running: true
         command: ["mosquitto_sub",
                   "--unix", "/run/user/1000/mosquitto.sock",
@@ -96,6 +115,14 @@ Scope {
             }
         }
     }
+
+    Timer {
+        id: reconnect
+        interval: 1000
+        repeat: false
+        onTriggered: liveState.running = true
+    }
+
 
     // Set while a slider handle is held, so incoming bus updates do not fight
     // the drag. See the binding above.

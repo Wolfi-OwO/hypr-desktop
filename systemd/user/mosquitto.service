@@ -3,8 +3,13 @@ Description=Mosquitto MQTT broker (desktop event bus)
 Documentation=man:mosquitto.conf(5)
 # Nothing else may create the socket path, and the shell needs the broker
 # before it starts subscribing.
-After=graphical-session-pre.target
-PartOf=graphical-session.target
+# NOT graphical-session.target. That target is never activated under Hyprland
+# -- it belongs to systemd-managed sessions, and `systemctl --user is-active
+# graphical-session.target` reports inactive here. Units wanted by it therefore
+# never started at login at all; they only ran when started by hand, which is
+# exactly why the desktop came up with no live data.
+#
+# default.target is the user manager's own target and is always active.
 
 [Service]
 Type=notify
@@ -39,4 +44,4 @@ SystemCallFilter=~@privileged @resources
 MemoryMax=80M
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=default.target
