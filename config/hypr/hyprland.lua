@@ -270,13 +270,13 @@ local ICON_MIN   = u(0xf0177)  -- md-window-minimize
 -- with "unknown config key 'plugin.hyprbars.bar_height'" and throws the red
 -- error overlay. The init script applies them after the plugin is loaded.
 hl.on("hyprland.start", function()
-    -- hypr-plugins-init entfaellt.
+    -- hypr-plugins-init is gone.
     --
     -- The script loaded hyprpm plugins and then waited up to twenty times
     -- 0.25 s for hyprbars to register its options. hyprbars is permanently
     -- disabled though (see #20: `hyprbars-button` is a legacy keyword and
     -- unreachable from a Lua configuration),
-    -- also lief die Schleife jedes Mal komplett durch: gemessen 5,1 Sekunden
+    -- so the loop ran to completion every single time: a measured 5.1 seconds of
     -- a black screen at startup.
     --
     -- The call was also `hyprpm reload -n` -- the `-n` is exactly the "Plugins
