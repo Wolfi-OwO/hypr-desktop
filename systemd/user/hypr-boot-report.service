@@ -1,0 +1,16 @@
+[Unit]
+Description=Record how the desktop came up this boot
+Documentation=file:%h/.local/bin/hypr-boot-report
+# Deliberately does NOT depend on the services it reports on: it has to be able
+# to record that they failed to start.
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/hypr-boot-report
+# Purely diagnostic; must never delay or block anything.
+Nice=19
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

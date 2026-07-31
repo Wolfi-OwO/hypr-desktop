@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Records how the desktop came up, once per boot.
+#
+# The login path cannot be tested without logging in, and a session that is
+# testing itself cannot survive the reboot it is testing. So this runs at the
+# start of the next session, waits for the pieces to settle, and writes down
+# what it found. Read it afterwards with:
+#
+#     cat ~/.cache/hypr/boot-report.txt
+#
+# It appends, so several boots can be compared. Nothing here is required for the
+# desktop to work -- if it fails, it fails quietly.
+
+set -uo pipefail
+
+REPORT="${XDG_CACHE_HOME:-$HOME/.cache}/hypr/boot-report.txt"
+mkdir -p "$(dirname "$REPORT")"
+
+# Wall clock from when the user session started, not from when this script did.
+# systemd knows when the user manager came up; that is the honest zero point.
+session_start=$(systemctl --user show -p ActiveEnterTimestampMonotonic --value default.target 2>/dev/null)
+now_mono=$(awk '{printf "%d", $1 * 1000000}' /proc/uptime)
+if [ -n "${session_start:-}" ] && [ "$session_start" -gt 0 ] 2>/dev/null; then
+  since_session=$(( (now_mono - session_start) / 1000 ))
+else
+  since_session=-1
+fi
+
+# Give the slow parts a moment; this is a report, not a race.
+sleep 20
+
+{
+  echo "==================================================================="
+  echo "boot report   $(date '+%Y-%m-%d %H:%M:%S')"
+  echo "==================================================================="
+  echo
+  echo "-- boot timing ----------------------------------------------------"
+  systemd-analyze 2>/dev/null | head -1 | sed 's/^/   /'
+  echo "   graphical.target critical chain:"
+  systemd-analyze critical-chain graphical.target 2>/dev/null \
+    | grep -E '@|\+' | head -8 | sed 's/^/     /'
+  echo
+  echo "-- user services --------------------------------------------------"
+  for u in mosquitto hypr-eventd hypr-calendar-cache.service; do
+    printf '   %-32s %s\n' "$u" "$(systemctl --user is-active "$u" 2>/dev/null)"
+  done
+  echo "   (all three must be active; they were WantedBy a target that never"
+  echo "    fires under Hyprland, which is what left the desktop empty)"
+  echo
+  echo "-- shell ----------------------------------------------------------"
+  printf '   quickshell instances   %s\n' "$(pgrep -cx qs 2>/dev/null || echo 0)"
+  printf '   layer surfaces         %s (3 is healthy)\n' \
+    "$(hyprctl layers 2>/dev/null | grep -c 'namespace: quickshell')"
+  printf '   bus subscriptions      %s\n' "$(pgrep -fc mosquitto_sub 2>/dev/null || echo 0)"
+  echo
+  echo "-- data actually present ------------------------------------------"
+  sock="/run/user/$(id -u)/mosquitto.sock"
+  for t in state apps weather theme; do
+    v=$(timeout 3 mosquitto_sub --unix "$sock" -t "hypr/$t" -C 1 -W 2 2>/dev/null | head -c 60)
+    printf '   hypr/%-8s %s\n' "$t" "${v:-<EMPTY>}"
+  done
+  printf '   calendar cache files   %s\n' \
+    "$(ls "${XDG_CACHE_HOME:-$HOME/.cache}"/hypr/hypr-calendar-*.json 2>/dev/null | wc -l)"
+  printf '   applications indexed   %s\n' \
+    "$("$HOME/.local/bin/hypr-applist" 2>/dev/null | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["apps"]))' 2>/dev/null || echo '?')"
+  echo
+  echo "-- network --------------------------------------------------------"
+  printf '   connection             %s\n' "$(nmcli -t -f NAME connection show --active 2>/dev/null | head -1)"
+  echo
+  echo "   session was $since_session ms old when this report started"
+  echo
+} >> "$REPORT" 2>&1
+
+exit 0
