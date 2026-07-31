@@ -48,8 +48,9 @@ Scope {
         ctl.anchorX = (centreX === undefined || centreX === null) ? -1 : centreX;
         if (ctl.active === which) { ctl.active = ""; return; }
         ctl.active = which;
-        readBrightness.running = true;
-        readVolume.running = true;
+        // No reader kick for volume or brightness: both arrive on the bus and
+        // are already current before the panel opens. Bluetooth still needs one
+        // -- the device list is not on the bus, only the power state is.
         if (which === "bluetooth") { ctl.btBusy = true; readBt.running = true; }
     }
 
@@ -57,29 +58,50 @@ Scope {
     function run(cmd) { runner.command = ["sh", "-c", cmd]; runner.running = true; }
 
     // ---- Reading ----------------------------------------------------------
+    //
+    // Volume and brightness come off the event bus, not from re-running
+    // `wpctl` and `brightnessctl` on a timer.
+    //
+    // They used to be read once when the panel opened and then again every 4 s.
+    // So pressing a volume or brightness key while the panel was open moved the
+    // slider anywhere up to four seconds later -- the value was already correct
+    // in the bar, because the bar was on the bus, and only this panel lagged.
+    //
+    // hypr-eventd publishes both from their real event sources: PipeWire's
+    // `pactl subscribe` for audio, and poll() on the backlight's
+    // actual_brightness for brightness. Measured end to end at ~24 ms and ~5 ms.
     Process {
-        id: readBrightness
-        command: ["sh", "-c", "brightnessctl -m 2>/dev/null | cut -d, -f4 | tr -d '%'"]
-        stdout: StdioCollector {
-            onStreamFinished: {
-                const v = parseInt(this.text.trim());
-                if (!isNaN(v)) ctl.brightness = v;
+        id: liveState
+        running: true
+        command: ["mosquitto_sub",
+                  "--unix", "/run/user/1000/mosquitto.sock",
+                  "-t", "hypr/audio", "-t", "hypr/brightness", "-t", "hypr/bluetooth",
+                  "-q", "0"]
+        stdout: SplitParser {
+            onRead: function (line) {
+                try {
+                    const d = JSON.parse(line.trim());
+                    // Each topic carries only its own keys; an absent field
+                    // means unchanged, not empty.
+                    //
+                    // While a slider is being dragged its own value wins:
+                    // otherwise the reading that is still in flight from the
+                    // previous drag position snaps the handle backwards under
+                    // the finger.
+                    if (d.vol !== undefined && !ctl.volumeDragging)         ctl.volume = d.vol;
+                    if (d.muted !== undefined)                              ctl.muted = d.muted;
+                    if (d.bright !== undefined && !ctl.brightnessDragging)  ctl.brightness = d.bright;
+                    if (d.bt !== undefined)                                 ctl.btPowered = d.bt === "on";
+                } catch (e) { /* keep the previous values */ }
             }
         }
     }
-    Process {
-        id: readVolume
-        command: ["sh", "-c",
-                  "wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null"]
-        stdout: StdioCollector {
-            onStreamFinished: {
-                const t = this.text.trim();
-                ctl.muted = t.indexOf("MUTED") !== -1;
-                const m = t.match(/([0-9]+\.[0-9]+)/);
-                if (m) ctl.volume = Math.round(parseFloat(m[1]) * 100);
-            }
-        }
-    }
+
+    // Set while a slider handle is held, so incoming bus updates do not fight
+    // the drag. See the binding above.
+    property bool volumeDragging: false
+    property bool brightnessDragging: false
+
     Process {
         id: readBt
         command: ["sh", "-c",
@@ -102,11 +124,14 @@ Scope {
         }
     }
 
+    // Bluetooth device list only. Volume and brightness are on the bus and need
+    // no timer at all; the device list has no event source here, so it is
+    // refreshed while its panel is open and not otherwise.
     Timer {
         interval: 4000
-        running: ctl.active !== ""
+        running: ctl.active === "bluetooth"
         repeat: true
-        onTriggered: { readBrightness.running = true; readVolume.running = true; }
+        onTriggered: readBt.running = true
     }
 
     // =======================================================================
@@ -231,6 +256,7 @@ Scope {
                             width: parent.width
                             value: ctl.brightness
                             accent: Theme.yellow
+                            onDraggingChanged: ctl.brightnessDragging = dragging
                             onMoved: function (v) {
                                 ctl.brightness = v;
                                 ctl.run("brightnessctl set " + Math.max(1, v) + "%");
@@ -283,6 +309,7 @@ Scope {
                             width: parent.width
                             value: ctl.volume
                             accent: ctl.muted ? Theme.surface2 : Theme.sapphire
+                            onDraggingChanged: ctl.volumeDragging = dragging
                             onMoved: function (v) {
                                 ctl.volume = v;
                                 ctl.run("wpctl set-volume @DEFAULT_AUDIO_SINK@ " + (v / 100).toFixed(2));
@@ -421,6 +448,10 @@ Scope {
         property int value: 0
         property color accent: Theme.mauve
         signal moved(int v)
+        // Held while the handle is dragged. The panel uses it to ignore bus
+        // updates mid-drag, which would otherwise snap the handle back to the
+        // last value the daemon published while the finger is still moving.
+        property bool dragging: false
 
         height: 18
 
@@ -453,8 +484,10 @@ Scope {
         MouseArea {
             anchors.fill: parent
             anchors.margins: -6
-            onPressed: function (m) { parent.apply(m.x); }
+            onPressed: function (m) { parent.dragging = true; parent.apply(m.x); }
             onPositionChanged: function (m) { if (pressed) parent.apply(m.x); }
+            onReleased: parent.dragging = false
+            onCanceled: parent.dragging = false
         }
 
         function apply(px) {
