@@ -25,22 +25,34 @@ ShellRoot {
     // Quick Settings (battery, power profile, appearance, system).
     // Replaces the rofi dropdowns: under Wayland those did not close on a
     // click beside them, and sat far too low.
-    QuickSettings {}
+    QuickSettings { id: quickSettings }
 
     // Apps, Places and Wi-Fi menus as panels instead of rofi.
-    Menus {}
+    Menus { id: menus }
 
     // Brightness, volume and Bluetooth as panels instead of foreign programs.
-    Controls {}
+    Controls { id: controls }
 
     // Alt+Tab switcher with an overlay.
-    AltTab {}
+    AltTab { id: altTab }
 
     // Top bar. Replaces waybar -- see the header of Bar.qml: waybar reloads
     // itself on every colour-scheme change and visibly disappears for around
     // 100 ms while doing so. Here the colours are bound to Theme and animate
     // along with it; nothing is rebuilt.
-    Bar { dnd: notifCentre.dnd }
+    Bar {
+        dnd: notifCentre.dnd
+
+        // Wire the bar straight to the panels. These all live in this one
+        // ShellRoot, so a click is a function call -- not `sh -c "qs ipc call"`,
+        // which launched a shell and a second Quickshell binary per click just
+        // to reach the process it was already running in.
+        onRequestMenu: function (which, cx) { menus.openMenu(which, cx); }
+        onRequestControl: function (which, cx) { controls.openPanel(which, cx); }
+        onRequestQuickSettings: function (cx) { quickSettings.toggleAt(cx); }
+        onRequestNotifications: notifCentre.panelOpen = !notifCentre.panelOpen
+        onRequestAltTab: altTab.step(1)
+    }
 
     // Immediate light/dark switching.
     //

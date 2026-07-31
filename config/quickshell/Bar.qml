@@ -150,15 +150,24 @@ Scope {
 
     Process { id: runner }
     function run(cmd) { runner.command = ["sh", "-c", cmd]; runner.running = true; }
-    function ipc(target, fn) { bar.run("qs ipc call " + target + " " + fn); }
-
-    // Same, with the trigger's horizontal centre appended. Quickshell passes
-    // trailing words as the function's arguments, so `menu wifiAt 1180` calls
-    // wifiAt(1180) and the panel can place itself under the icon instead of at
-    // a screen edge.
-    function ipcAt(target, fn, centreX) {
-        bar.run("qs ipc call " + target + " " + fn + " " + Math.round(centreX));
-    }
+    // Panel requests are SIGNALS, not IPC calls.
+    //
+    // Every one of these used to run `sh -c "qs ipc call ..."`: a shell, then a
+    // full Quickshell binary with all of Qt behind it, launched purely to send a
+    // message to the process that launched it. Measured at ~20 ms per click on
+    // an idle machine, and there is nothing bounding it under load.
+    //
+    // The bar and every panel are children of the same ShellRoot, so shell.qml
+    // simply connects these signals to the panels directly. Same process, one
+    // function call, no subprocess.
+    //
+    // The IpcHandlers on the panels stay -- keybindings in hyprland.lua and
+    // manual `qs ipc call` still use them.
+    signal requestMenu(string which, real centreX)
+    signal requestControl(string which, real centreX)
+    signal requestQuickSettings(real centreX)
+    signal requestNotifications()
+    signal requestAltTab()
 
     // ---- Icons ------------------------------------------------------------
     // Volume: the louder it is, the more waves on the icon.
@@ -256,11 +265,11 @@ Scope {
 
                     TextButton {
                         text: "Apps"; bold: true
-                        onActivated: function (cx) { bar.ipcAt("menu", "appsAt", cx); }
+                        onActivated: function (cx) { bar.requestMenu("apps", cx); }
                     }
                     TextButton {
                         text: "Places"; bold: true
-                        onActivated: function (cx) { bar.ipcAt("menu", "placesAt", cx); }
+                        onActivated: function (cx) { bar.requestMenu("places", cx); }
                     }
 
                     // Arbeitsflaechen. Quickshell.Hyprland liefert sie
@@ -342,7 +351,7 @@ Scope {
                         mono: true
                         pixel: 14
                         colour: Theme.lavender
-                        onActivated: function () { bar.ipc("alttab", "next"); }
+                        onActivated: function () { bar.requestAltTab(); }
                     }
                 }
 
@@ -376,7 +385,7 @@ Scope {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: bar.ipc("notifications", "toggle")
+                        onClicked: bar.requestNotifications()
                     }
                 }
 
@@ -396,7 +405,7 @@ Scope {
                               col: bar.temp >= 85 ? Theme.red
                                  : bar.temp >= 70 ? Theme.yellow : Theme.peach }
                         ]
-                        onActivated: function (cx) { bar.ipcAt("quicksettings", "toggleAt", cx); }
+                        onActivated: function (cx) { bar.requestQuickSettings(cx); }
                     }
 
                     // Notifications
@@ -407,21 +416,21 @@ Scope {
                         // Struck through and muted while "do not disturb" is on.
                         strike: bar.dnd
                         colour: bar.dnd ? Theme.surface2 : Theme.lavender
-                        onActivated: bar.ipc("notifications", "toggle")
+                        onActivated: function () { bar.requestNotifications(); }
                     }
 
                     // toggle
                     Pill {
                         icons: [
                             { ico: 0xf00b1, col: bar.bt === "on" ? Theme.blue : Theme.surface2,
-                              act: function (cx) { bar.ipcAt("controls", "bluetoothAt", cx); } },
+                              act: function (cx) { bar.requestControl("bluetooth", cx); } },
                             { ico: bar.netIcon(),
                               col: bar.net === "off" ? Theme.red : Theme.sapphire,
-                              act: function (cx) { bar.ipcAt("menu", "wifiAt", cx); } },
+                              act: function (cx) { bar.requestMenu("wifi", cx); } },
                             { ico: bar.volIcon(), col: bar.volColour(),
-                              act: function (cx) { bar.ipcAt("controls", "volumeAt", cx); } },
+                              act: function (cx) { bar.requestControl("volume", cx); } },
                             { ico: bar.brightIcon(), col: bar.brightColour(),
-                              act: function (cx) { bar.ipcAt("controls", "brightnessAt", cx); } }
+                              act: function (cx) { bar.requestControl("brightness", cx); } }
                         ]
                     }
 
@@ -436,7 +445,7 @@ Scope {
                                  : bar.batt <= 30 ? Theme.yellow : Theme.maroon },
                             { ico: 0xf0425, txt: "", col: Theme.red }
                         ]
-                        onActivated: function (cx) { bar.ipcAt("quicksettings", "toggleAt", cx); }
+                        onActivated: function (cx) { bar.requestQuickSettings(cx); }
                     }
                 }
             }

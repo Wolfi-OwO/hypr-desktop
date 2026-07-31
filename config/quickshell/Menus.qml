@@ -51,7 +51,8 @@ Scope {
         menus.anchorX = (centreX === undefined || centreX === null) ? -1 : centreX;
         if (menus.active === which) { menus.active = ""; return; }
         menus.active = which;
-        if (which === "apps") loadApps.running = true;
+        // No loader kick for "apps": the list arrives on the bus and is already
+        // in appList before the menu opens.
         if (which === "places") loadPlaces.running = true;
         if (which === "wifi") { menus.wifiBusy = true; loadWifi.running = true; }
     }
@@ -63,32 +64,30 @@ Scope {
         menus.active = "";
     }
 
-    // ---- Applications, read from the .desktop files ------------------------
+    // ---- Applications, subscribed from the event bus ----------------------
+    //
+    // This used to be an inline shell loop that ran four greps plus cut, sed
+    // and basename per .desktop file, EVERY time the menu opened. Measured on
+    // this machine: 225 files, 1463 forked processes, 927 ms. That is what made
+    // the menu feel like it took seconds to react -- the panel animated open
+    // immediately and then sat empty while the scan ran.
+    //
+    // hypr-applist does the same work in one process (29 ms cold, 17 ms from
+    // cache) and hypr-eventd publishes it retained, so the list is already here
+    // before the menu is opened. Opening it now costs nothing at all.
     Process {
         id: loadApps
-        command: ["sh", "-c", `
-            for d in /usr/share/applications "$HOME/.local/share/applications" \
-                     /var/lib/flatpak/exports/share/applications; do
-              [ -d "$d" ] || continue
-              for f in "$d"/*.desktop; do
-                [ -f "$f" ] || continue
-                grep -q '^NoDisplay=true' "$f" && continue
-                n=$(grep -m1 '^Name=' "$f" | cut -d= -f2-)
-                e=$(grep -m1 '^Exec=' "$f" | cut -d= -f2- | sed 's/%[fFuUdDnNickvm]//g')
-                ic=$(grep -m1 '^Icon=' "$f" | cut -d= -f2-)
-                wc=$(grep -m1 '^StartupWMClass=' "$f" | cut -d= -f2-)
-                [ -z "$wc" ] && wc=$(basename "$f" .desktop)
-                [ -n "$n" ] && [ -n "$e" ] && printf '%s\\t%s\\t%s\\t%s\\n' "$n" "$e" "$ic" "$wc"
-              done
-            done | sort -u -f
-        `]
-        stdout: StdioCollector {
-            onStreamFinished: {
-                const rows = this.text.trim().split("\n").filter(l => l.indexOf("\t") > 0);
-                menus.appList = rows.map(l => {
-                    const p = l.split("\t");
-                    return { name: p[0], exec: p[1], icon: p[2] || "", wmclass: p[3] || "" };
-                });
+        running: true
+        command: ["mosquitto_sub",
+                  "--unix", "/run/user/1000/mosquitto.sock",
+                  "-t", "hypr/apps",
+                  "-q", "0"]
+        stdout: SplitParser {
+            onRead: function (line) {
+                try {
+                    const d = JSON.parse(line.trim());
+                    if (d && d.apps) menus.appList = d.apps;
+                } catch (e) { /* keep the list we already have */ }
             }
         }
     }

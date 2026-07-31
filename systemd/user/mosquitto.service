@@ -34,9 +34,9 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
 
-# Hard stop well above the broker's own memory_limit, so a leak anywhere in the
+# Hard stop above the broker's own 32 MB memory_limit, so a leak anywhere in the
 # process -- not just in mosquitto's own accounting -- is still bounded.
-MemoryMax=48M
+MemoryMax=80M
 
 [Install]
 WantedBy=graphical-session.target

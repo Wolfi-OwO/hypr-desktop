@@ -44,6 +44,7 @@ immediately rather than waiting for the next change:
     hypr/theme       {"dark": true}
     hypr/power       {"profile": "balanced"}
     hypr/weather     the full object hypr-weather emits, refreshed every 15 min
+    hypr/apps        installed applications, for the launcher menu
 
 Only changed values are published. A desktop sitting idle produces no traffic.
 """
@@ -640,6 +641,35 @@ def watch_weather(mqtt, stop):
         stop.wait(interval)
 
 
+def watch_apps(mqtt, stop):
+    """Installed applications, published retained so the menu opens instantly.
+
+    Its own thread for the same reason as the weather: this is disk work, and
+    the main loop must not stall behind it.
+
+    The menu used to build this list itself, in shell, every time it opened --
+    1463 forked processes and 927 ms measured, which is what made opening it
+    feel like it took seconds. hypr-applist does the same scan in one process
+    and caches the result; publishing it retained means the menu does not even
+    wait for that.
+
+    Rechecked every 30 s, but hypr-applist only rebuilds when a .desktop
+    directory's mtime has actually changed, so the steady-state cost is one
+    cache read.
+    """
+    while not stop.is_set():
+        try:
+            out = subprocess.run(
+                [os.path.expanduser("~/.local/bin/hypr-applist")],
+                capture_output=True, text=True, timeout=20,
+            ).stdout.strip()
+            if out:
+                mqtt.publish("hypr/apps", out)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        stop.wait(30)
+
+
 def watch_network(flags, stop):
     """`ip monitor` reports link, address and route changes as they happen.
 
@@ -687,6 +717,7 @@ def main():
     # Takes the broker rather than the flags: it publishes on its own schedule
     # instead of asking the main loop to do it.
     threading.Thread(target=watch_weather, args=(mqtt, stop), daemon=True).start()
+    threading.Thread(target=watch_apps, args=(mqtt, stop), daemon=True).start()
 
     # Last published payload per topic. Publishing only on change is what keeps
     # an idle desktop completely silent on the bus.

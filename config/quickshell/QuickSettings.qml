@@ -54,11 +54,16 @@ Scope {
         function toggle(): void { qs.panelOpen = !qs.panelOpen; if (qs.panelOpen) qs.refresh(); }
         function show(): void { qs.panelOpen = true; qs.refresh(); }
         function hide(): void { qs.panelOpen = false; }
-        function toggleAt(x: real): void {
-            qs.anchorX = x;
-            qs.panelOpen = !qs.panelOpen;
-            if (qs.panelOpen) qs.refresh();
-        }
+        function toggleAt(x: real): void { qs.toggleAt(x); }
+    }
+
+    // On the root, not only inside the IpcHandler: shell.qml calls this
+    // directly when the bar's battery pill is clicked, so the click costs one
+    // function call instead of spawning `qs ipc call`.
+    function toggleAt(x) {
+        qs.anchorX = (x === undefined || x === null) ? -1 : x;
+        qs.panelOpen = !qs.panelOpen;
+        if (qs.panelOpen) qs.refresh();
     }
 
     // Nothing to refresh on demand any more: every value below arrives on the
