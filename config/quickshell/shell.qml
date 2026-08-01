@@ -821,7 +821,7 @@ ShellRoot {
                                           root.cSurface1.b, 0.9)
                     antialiasing: true
 
-                    // Schatten: leicht versetztes, dunkles Rechteck dahinter.
+                    // Shadow: a slightly offset dark rectangle behind it.
                     // No DropShadow effect -- that would need Qt5Compat, and
                     // for this purpose a plain offset rectangle is enough.
                     Rectangle {

@@ -1,5 +1,5 @@
-# Sobald eine qmldir existiert, werden Geschwisterdateien NICHT mehr
-# automatisch als Komponenten erkannt — deshalb muessen hier alle stehen.
+# Once a qmldir exists, sibling files are NO LONGER picked up automatically as
+# components -- which is why every one of them has to be listed here.
 singleton Theme 1.0 Theme.qml
 singleton CalendarData 1.0 CalendarData.qml
 singleton Bus 1.0 Bus.qml
