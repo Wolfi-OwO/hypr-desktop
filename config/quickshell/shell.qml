@@ -843,21 +843,27 @@ ShellRoot {
                         playing: parent.animated
                         cache: true
                         asynchronous: true
-                        // Decode at roughly twice the drawn size, not at the
-                        // file's own resolution.
+                        // NO sourceSize here, deliberately.
                         //
-                        // These frames are 150x150. The sources are not:
-                        // 03.png is 1937x1903 and decodes to 14.1 MB, 02.png is
-                        // 1999x704 for 5.4 MB, and 01.gif is 500x500 across 14
-                        // frames, all of which are held at once, for 13.4 MB.
-                        // That is 32.8 MB of RGBA to draw three thumbnails that
-                        // between them need about 0.26 MB.
+                        // It was set to 300x300 to cut decode cost -- these
+                        // frames are 150x150 while the sources are 1937x1903,
+                        // 1999x704 and a 14-frame 500x500 gif, about 32.8 MB of
+                        // RGBA to draw three thumbnails. The saving was real but
+                        // the method was wrong: giving BOTH dimensions scales
+                        // each image to FIT that box while preserving aspect, so
+                        // the wide 1999x704 came out 300x105. PreserveAspectCrop
+                        // then had to scale that back UP to cover a 150x150
+                        // frame, which is why the photos looked stretched and
+                        // spilled outside their borders.
                         //
-                        // 300x300 is 2x the drawn size, which keeps the crop
-                        // and any future scaling sharp while cutting the cost
-                        // by more than 95%.
-                        sourceSize.width: 300
-                        sourceSize.height: 300
+                        // A single dimension would preserve aspect correctly,
+                        // but the right one differs per image -- width for the
+                        // tall ones, height for the wide one -- and this is a
+                        // shared component. Correct rendering is worth more than
+                        // 30 MB, so the images decode at their own size. The
+                        // wallpaper saving in this file stands: those two share
+                        // the screen's exact aspect ratio, so a square-free
+                        // sourceSize is unambiguous there.
                     }
                 }
 
