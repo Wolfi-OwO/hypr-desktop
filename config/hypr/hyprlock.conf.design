@@ -31,6 +31,30 @@ $red      = rgb(ff8fa8)
 $green    = rgb(8fe0a8)
 $yellow   = rgb(f7d9a0)
 
+# WIDGET SCALE -- these are the 1x DESIGN values. Do not edit them by hand.
+#
+# The live hyprlock.conf is generated from this file by hypr-lock-scale, which
+# multiplies every geometry value by a factor. Anything written into
+# hyprlock.conf directly is lost on the next rescale -- put it here instead.
+#
+# Measured facts, so they are not re-derived wrongly:
+#   * hyprlock draws in PHYSICAL pixels. This panel is 2880x1800 at scale 2.
+#   * The greeter's clock is 472 px wide. hyprlock matches it at 1.27x
+#     (475 px, 0.6% off). That is the true 1:1 factor.
+#   * The SDDM theme's su factor (1.7) does NOT translate into hyprlock font
+#     sizes. Deriving from the QML gave 163 px and was wrong by a third.
+#     Capture with grim and measure; do not compute.
+#   * The greeter's avatar is proportionally LARGER relative to its clock than
+#     hyprlock's was. Measured at 1.5x: clock 557 px vs the greeter's 472 (18%
+#     too big) while the avatar was 456 vs 510 (11% too small). No single factor
+#     fixes both -- the clock matches at 1.27, the avatar only at ~1.68, which
+#     is why every scale felt wrong somewhere.
+#     The avatar ring and image are therefore raised by 1.12 IN THIS BASELINE
+#     (208 -> 233, 120 -> 134), so the proportion is corrected once and survives
+#     every rescale.
+#
+# Factors walked through: 1.0 1.2 1.25 1.27 1.35 1.37 1.4 1.5 1.6 1.7 2.0
+
 general {
     hide_cursor = true
     ignore_empty_input = true
@@ -134,7 +158,7 @@ label {
 image {
     monitor =
     path = /home/woofi/.local/share/backgrounds/lock-stripe.png
-    size = 208
+    size = 233
     rounding = 0
     border_size = 0
     position = 0, 145
@@ -179,7 +203,7 @@ image {
 image {
     monitor =
     path = /var/lib/AccountsService/icons/woofi
-    size = 120
+    size = 134
     rounding = -1              # -1 = vollstaendig rund
     border_size = 0            # the border comes from the ring underneath
     # Same centre point as the ring underneath.
