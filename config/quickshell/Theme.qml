@@ -28,7 +28,36 @@ import QtQuick
 Singleton {
     id: theme
 
-    property bool dark: true
+    // Seeded from disk, NOT hardcoded to true.
+    //
+    // This used to read `property bool dark: true`, which is why the wrong
+    // wallpaper flashed up at every login. The shell drew the dark image
+    // because that was the hardcoded assumption, then hypr/theme arrived a
+    // moment later and, in light mode, cross-faded to the other one. What you
+    // saw was a background briefly showing the wrong picture before settling.
+    //
+    // The scheme is now persisted on every change and read back synchronously
+    // here -- blockLoading, so the value is present before the first frame is
+    // drawn rather than arriving as an update after it. The bus still has the
+    // last word; this only removes the guess.
+    //
+    // If the file is missing or unreadable the fallback is dark, which is the
+    // old behaviour and the right default for a first run.
+    property bool dark: {
+        try {
+            const t = schemeCache.text();
+            if (t.length > 0) return JSON.parse(t).dark === true;
+        } catch (e) { /* first run, or a half-written file */ }
+        return true;
+    }
+
+    FileView {
+        id: schemeCache
+        path: "/home/woofi/.cache/hypr/theme.json"
+        blockLoading: true
+        // Absent on a first run; the property initialiser above handles that.
+        printErrors: false
+    }
 
     // Cross-fade duration -- set once here, applies to everything.
     //
@@ -51,7 +80,16 @@ Singleton {
     // during the fade the clock kept its old colour and only jumped on the
     // next tick, while everything around it faded smoothly.
     property bool fading: false
-    onDarkChanged: { theme.fading = true; fadeWindow.restart(); }
+    // ONE handler: QML permits only a single onDarkChanged per object, and
+    // declaring a second silently costs you the whole file ("Property value set
+    // multiple times"). Both jobs live here.
+    onDarkChanged: {
+        theme.fading = true;
+        fadeWindow.restart();
+        // Persist the scheme so the next startup can seed `dark` from disk
+        // instead of guessing. See the property initialiser above.
+        schemeCache.setText(JSON.stringify({ dark: theme.dark }));
+    }
 
     Timer {
         id: fadeWindow
@@ -145,46 +183,13 @@ Singleton {
     // key changes. The retained message is delivered on connect too, so the
     // very first frame after login already has the right scheme rather than
     // defaulting to dark and correcting itself.
-    Process {
-        id: themeSub
-
-        // A subscription that exits must come back.
-
-        //
-
-        // Quickshell does not restart a Process on its own, so when mosquitto_sub
-
-        // exited -- because the broker restarted, or simply because the shell won
-
-        // the race against it at login -- the subscription stayed dead for the whole
-
-        // session. The panel then kept showing its last received values forever,
-
-        // with no error anywhere. That is what froze the whole shell after the
-
-        // broker was restarted.
-
-        onExited: reconnect.start()
-
-        running: true
-        command: ["mosquitto_sub",
-                  "--unix", "/run/user/1000/mosquitto.sock",
-                  "-t", "hypr/theme",
-                  "-q", "0"]
-        stdout: SplitParser {
-            onRead: function (line) {
-                try {
-                    theme.dark = JSON.parse(line.trim()).dark;
-                } catch (e) { /* keep the previous scheme */ }
-            }
+    // The scheme arrives on the shared Bus singleton. See Bus.qml.
+    Connections {
+        target: Bus
+        function onMessage(topic, d) {
+            if (topic === "hypr/theme" && d.dark !== undefined) theme.dark = d.dark;
         }
     }
 
-    Timer {
-        id: reconnect
-        interval: 1000
-        repeat: false
-        onTriggered: themeSub.running = true
-    }
 
 }

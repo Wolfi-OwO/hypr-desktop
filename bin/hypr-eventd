@@ -19,15 +19,16 @@ worst-case staleness of one tick.
 
 DETECTION LATENCY
 -----------------
-TICK is 750 ms, the guaranteed upper bound for anything with no event source of
+TICK is 1.1 s, the guaranteed upper bound for anything with no event source of
 its own: CPU, temperature, battery, network throughput. Everything that does
 have one is published the moment the event arrives -- measured at ~24 ms for
 volume and mute (pactl subscribe) and ~5 ms for brightness (sysfs_notify on
 actual_brightness).
 
-750 rather than 500: at 500 ms the download rate flickered, because the
-sampling window was short enough for ordinary traffic bursts to swing the
-figure between one reading and the next.
+The tick went 500 -> 750 -> 1100 ms because the download rate read as jittery.
+Slowing it was only half the fix: a slower tick samples less often but each
+sample is just as noisy. The rate is therefore also smoothed (see _RATE_ALPHA),
+which is what actually makes it readable.
 
 TOPICS
 ------
@@ -59,20 +60,20 @@ import sys
 import threading
 import time
 
-# 750 ms: the refresh budget for everything without an event source.
+# 1.1 s: the refresh budget for everything without an event source.
 #
-# This started at 500 ms and was slowed down deliberately. At 500 ms the
-# download rate was visibly jittery -- the sampling window is short enough that
-# ordinary traffic bursts swing the figure between readings, so the number
-# flickered rather than informed. 750 ms both widens the averaging window for
-# the throughput calculation and slows the redraw to something readable.
+# Started at 500 ms, then 750, now 1100. Each step was a response to the
+# download rate reading as twitchy rather than informative. Slowing the tick
+# alone never fully fixed it -- it samples less often but each sample is just as
+# noisy -- so the rate is smoothed as well (_RATE_ALPHA). Together they give a
+# figure that settles instead of flickering.
 #
 # This is NOT the latency of anything a key press or a click causes: volume,
 # mute and brightness have real event sources and are published within
 # milliseconds, independently of this tick. What it bounds is how stale a
 # sensor reading can be -- CPU, temperature, battery, network throughput --
 # none of which changes meaningfully faster than this.
-TICK = 0.75
+TICK = 1.1
 
 SOCKET_PATH = os.environ.get(
     "HYPR_MQTT_SOCKET", f"/run/user/{os.getuid()}/mosquitto.sock"
@@ -350,12 +351,28 @@ def default_iface():
 
 
 _prev_rx = None
+_rate_avg = None
+
+# Exponential smoothing factor for the download rate.
+#
+# Slowing the tick alone does not fix a jittery rate -- it samples less often
+# but each sample is just as noisy, so the number still jumps between wildly
+# different values, only less frequently. Real traffic is bursty at this
+# timescale: a single sample says almost nothing about the rate a human would
+# describe.
+#
+# So the rate is smoothed rather than the tick slowed further. 0.4 weights the
+# newest sample at 40%, which settles a burst over roughly three ticks while
+# still reacting visibly when a download genuinely starts or stops. This affects
+# ONLY the displayed rate; every event-driven source stays instant.
+_RATE_ALPHA = 0.4
 
 
 def down_rate(iface):
-    global _prev_rx
+    global _prev_rx, _rate_avg
     if not iface:
         _prev_rx = None
+        _rate_avg = None
         return "0 B/s"
     raw = read(f"/sys/class/net/{iface}/statistics/rx_bytes")
     if not raw.isdigit():
@@ -363,13 +380,21 @@ def down_rate(iface):
     now, t = int(raw), time.monotonic()
     if _prev_rx is None or _prev_rx[2] != iface:
         _prev_rx = (now, t, iface)
+        _rate_avg = None
         return "0 B/s"
     prev, pt, _ = _prev_rx
     dt = t - pt
     _prev_rx = (now, t, iface)
     if dt <= 0 or now < prev:
         return "0 B/s"
-    rate = int((now - prev) / dt)
+
+    sample = (now - prev) / dt
+    # Seed from the first real sample rather than from zero, otherwise the
+    # display would ramp up from 0 over several ticks after every interface
+    # change and read as though the connection were slow.
+    _rate_avg = sample if _rate_avg is None else (
+        _RATE_ALPHA * sample + (1.0 - _RATE_ALPHA) * _rate_avg)
+    rate = int(_rate_avg)
     if rate >= 1048576:
         return f"{rate // 1048576} MB/s"
     if rate >= 1024:

@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Memory report for this desktop, measured honestly.
+
+WHY PSS AND NOT RSS
+-------------------
+RSS counts every shared page against every process that maps it, so adding up
+RSS across a desktop double-counts Qt, GTK and libc many times over and produces
+a total larger than the machine has. `btop` and most process lists show RSS.
+
+PSS ("proportional set size") divides each shared page by the number of
+processes sharing it, so the column adds up to something real. Every figure here
+is PSS, read from /proc/<pid>/smaps_rollup.
+
+The difference is not academic: measured on this machine, Quickshell showed
+280 MB RSS against 159 MB PSS. Optimising against the wrong number wastes
+effort on pages that are already shared.
+
+BASELINE (2026-08-01, for regression checks)
+--------------------------------------------
+    total userland      1381 MB   -- of which a Claude session was 510 MB
+    qs (shell)           356 MB   -> 138 MB after the image and reload fixes
+    mosquitto              2.9 MB -- the broker was never the problem
+    7 mosquitto_sub        7.2 MB -> 1 subscriber after the Bus refactor
+
+Usage:
+    hypr-memreport              grouped report against the budget
+    hypr-memreport --all        every process, no grouping
+    hypr-memreport --budget N   budget in MB (default 1500)
+"""
+
+import os
+import sys
+
+# Roles, matched against the process comm. Order matters: first match wins.
+GROUPS = [
+    ("shell",      ("qs", "quickshell", "mosquitto", "mosquitto_sub", "python3")),
+    ("compositor", ("Hyprland", "Xwayland", "Xorg")),
+    ("audio",      ("pipewire", "pipewire-pulse", "wireplumber")),
+    ("desktop",    ("xdg-desktop-por", "polkit-gnome-au", "gnome-keyring-d",
+                    "goa-daemon", "goa-identity-se", "gvfsd",
+                    "evolution-calen", "evolution-sourc", "evolution-addre",
+                    "dunst", "sddm-helper")),
+    ("terminal",   ("kitty", "kitten", "zsh", "bash")),
+]
+
+
+def pss_kb(pid):
+    """PSS of one process in kB, or 0 if it cannot be read."""
+    try:
+        with open(f"/proc/{pid}/smaps_rollup") as f:
+            for line in f:
+                if line.startswith("Pss:"):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
+def comm(pid):
+    try:
+        with open(f"/proc/{pid}/comm") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def classify(name):
+    for group, names in GROUPS:
+        if name in names:
+            return group
+    return "applications"
+
+
+def collect():
+    """Every readable process. Returns (list, hidden_count).
+
+    smaps_rollup of a process owned by another user is not readable without
+    privileges, so run as an ordinary user this misses root-owned processes --
+    on this machine that is Xorg (the SDDM greeter's server, ~62 MB) and
+    libvirtd among others. The count is reported rather than quietly dropped,
+    because a total that silently omits 100 MB is worse than no total.
+    Re-run under sudo for the complete picture.
+    """
+    out = []
+    hidden = 0
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        p = pss_kb(entry)
+        if p <= 0:
+            # Either a kernel thread, which genuinely has no userland memory,
+            # or a process this user may not inspect. Kernel threads have no
+            # cmdline; that is what tells the two apart.
+            try:
+                with open(f"/proc/{entry}/cmdline", "rb") as f:
+                    if f.read(1):
+                        hidden += 1
+            except OSError:
+                pass
+            continue
+        out.append((p, int(entry), comm(entry)))
+    return out, hidden
+
+
+def main():
+    budget_mb = 1500
+    if "--budget" in sys.argv:
+        try:
+            budget_mb = int(sys.argv[sys.argv.index("--budget") + 1])
+        except (IndexError, ValueError):
+            pass
+
+    procs, hidden = collect()
+    total_kb = sum(p for p, _, _ in procs)
+
+    if "--all" in sys.argv:
+        print(f"{'PSS':>10}  {'PID':>7}  process")
+        for p, pid, name in sorted(procs, reverse=True):
+            print(f"{p / 1024:9.1f}M  {pid:7d}  {name}")
+        print(f"\n{total_kb / 1024:9.1f}M  TOTAL")
+        if hidden:
+            print(f"({hidden} processes not readable as this user -- re-run with sudo)")
+        return
+
+    grouped = {}
+    for p, pid, name in procs:
+        g = classify(name)
+        grouped.setdefault(g, []).append((p, pid, name))
+
+    order = ["shell", "compositor", "audio", "desktop", "terminal", "applications"]
+    for g in order:
+        items = grouped.get(g)
+        if not items:
+            continue
+        gt = sum(p for p, _, _ in items)
+        print(f"\n{g.upper():<14} {gt / 1024:8.1f} MB")
+        # Only the meaningful ones; a long tail of 1 MB helpers is noise.
+        for p, pid, name in sorted(items, reverse=True)[:6]:
+            if p / 1024 < 1.0:
+                continue
+            print(f"   {p / 1024:8.1f} MB  {name}")
+        rest = len(items) - 6
+        if rest > 0:
+            print(f"   {'':8}     ... and {rest} more")
+
+    total_mb = total_kb / 1024
+    print(f"\n{'TOTAL':<14} {total_mb:8.1f} MB   (budget {budget_mb} MB)")
+    if hidden:
+        print(f"{'':<14} {'':8}      NOTE: {hidden} process(es) not readable as "
+              f"this user and NOT counted (root-owned, e.g. Xorg). "
+              f"Re-run with sudo for the true total.")
+
+    if total_mb <= budget_mb:
+        print(f"{'':<14} {'':8}      within budget, {budget_mb - total_mb:.0f} MB spare")
+    else:
+        print(f"{'':<14} {'':8}      OVER by {total_mb - budget_mb:.0f} MB")
+
+    # The single largest consumer is worth naming: on this machine it has
+    # repeatedly turned out to be an application, not the desktop, and time
+    # spent shaving the shell while a browser holds 900 MB is time wasted.
+    if procs:
+        p, _, name = max(procs)
+        print(f"\nlargest single process: {name} at {p / 1024:.0f} MB "
+              f"({100 * p / total_kb:.0f}% of total)")
+
+    return 0 if total_mb <= budget_mb else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

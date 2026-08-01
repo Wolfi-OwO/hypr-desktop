@@ -48,62 +48,20 @@ Scope {
     property string taskText: ""
     property string taskTip: ""
 
-    Process {
-        id: state
-
-
-        // Subscribed to the event bus, not polling a script.
-        //
-        // This used to run `hypr-bar-state` on a 2 s timer. Measured with
-        // strace, one run of that script costs 107 clone() and 75 execve()
-        // calls -- it shells out to hypr-widget-stats, ip, cat, date, wpctl,
-        // grep, awk, brightnessctl, bluetoothctl and iwctl. Running it fast
-        // enough to feel immediate was never an option; at 500 ms it would
-        // have meant roughly 360 process creations per second.
-        //
-        // hypr-eventd now reads the same values out of /proc and /sys with no
-        // forks at all and publishes them here. mosquitto_sub holds one
-        // long-lived connection and writes one line per change.
-        //
-        // The retained message is deliberately NOT suppressed (no -R): it is
-        // delivered the moment this subscribes, so the bar draws real values on
-        // its first frame instead of zeros. That is the same reason the widget
-        // caches moved to ~/.cache -- nothing on this desktop should come up
-        // empty and fill in afterwards.
-        // A subscription that exits must come back.
-        //
-        // Quickshell does not restart a Process on its own, so when mosquitto_sub
-        // exited -- because the broker restarted, or simply because the shell won
-        // the race against it at login -- the subscription stayed dead for the whole
-        // session. The panel then kept showing its last received values forever,
-        // with no error anywhere. That is what froze the whole shell after the
-        // broker was restarted.
-        onExited: reconnect.start()
-        running: true
-        command: ["mosquitto_sub",
-                  "--unix", "/run/user/1000/mosquitto.sock",
-                  "-t", "hypr/state",
-                  "-q", "0"]
-        stdout: SplitParser {
-            onRead: function (line) {
-                try {
-                    const d = JSON.parse(line.trim());
-                    bar.cpu = d.cpu; bar.mem = d.mem; bar.temp = d.temp;
-                    bar.batt = d.batt; bar.battState = d.battState;
-                    bar.down = d.down; bar.vol = d.vol; bar.muted = d.muted;
-                    bar.bright = d.bright; bar.bt = d.bt;
-                    bar.net = d.net; bar.ssid = d.ssid;
-                } catch (e) { /* keep the previous state */ }
+        // Values arrive on the shared Bus singleton -- ONE subscription for the
+        // whole shell rather than one per file. See Bus.qml.
+        Connections {
+            target: Bus
+            function onMessage(topic, d) {
+                if (topic !== "hypr/state") return;
+                bar.cpu = d.cpu; bar.mem = d.mem; bar.temp = d.temp;
+                bar.batt = d.batt; bar.battState = d.battState;
+                bar.down = d.down; bar.vol = d.vol; bar.muted = d.muted;
+                bar.bright = d.bright; bar.bt = d.bt;
+                bar.net = d.net; bar.ssid = d.ssid;
             }
         }
-    }
 
-    Timer {
-        id: reconnect
-        interval: 1000
-        repeat: false
-        onTriggered: state.running = true
-    }
 
 
     Process {
@@ -165,8 +123,10 @@ Scope {
 
     SystemClock { id: clk; precision: SystemClock.Minutes }
 
-    Process { id: runner }
-    function run(cmd) { runner.command = ["sh", "-c", cmd]; runner.running = true; }
+    // Detached: a Process owns its child, and a config reload destroys the
+    // Process — which killed every application started from the shell. See the
+    // long note in Menus.qml.
+    function run(cmd) { Quickshell.execDetached(["sh", "-c", cmd]); }
     // Panel requests are SIGNALS, not IPC calls.
     //
     // Every one of these used to run `sh -c "qs ipc call ..."`: a shell, then a
@@ -422,7 +382,12 @@ Scope {
                               col: bar.temp >= 85 ? Theme.red
                                  : bar.temp >= 70 ? Theme.yellow : Theme.peach }
                         ]
-                        onActivated: function (cx) { bar.requestQuickSettings(cx); }
+                        // The system panel, NOT Quick Settings. These three are
+                        // download rate, memory and temperature; Quick Settings
+                        // is battery, power mode, appearance and shutdown. They
+                        // had nothing to do with each other -- clicking a
+                        // temperature reading offered to log you out.
+                        onActivated: function (cx) { bar.requestControl("system", cx); }
                     }
 
                     // Notifications

@@ -1,6 +1,8 @@
 # Sobald eine qmldir existiert, werden Geschwisterdateien NICHT mehr
 # automatisch als Komponenten erkannt — deshalb muessen hier alle stehen.
 singleton Theme 1.0 Theme.qml
+singleton CalendarData 1.0 CalendarData.qml
+singleton Bus 1.0 Bus.qml
 NotificationCenter 1.0 NotificationCenter.qml
 QuickSettings 1.0 QuickSettings.qml
 Menus 1.0 Menus.qml

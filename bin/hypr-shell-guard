@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Watches that the shell surfaces are actually there.
+# Watches that the shell's layer surfaces are actually on screen.
 #
-# Background: Quickshell once kept running as a process but had NOT a single
-# Layer-Surface mehr — `hyprctl layers` war leer. Sichtbar war dadurch weder
-# bar, no wallpaper and no widgets, even though `pgrep qs` reported a running
-# process. A plain process watchdog (systemd Restart=always) would not have
-# noticed, because nothing had crashed.
+# Background: Quickshell once kept running as a process while having not a
+# single layer surface left -- `hyprctl layers` was empty. No bar, no wallpaper
+# and no widgets, even though `pgrep qs` reported a healthy process. A plain
+# process watchdog (systemd Restart=always) would not have noticed, because
+# nothing had crashed.
 #
 # The cause was never reproduced; the most likely candidate is the output
 # briefly disappearing, at which point `Variants` over `Quickshell.screens`
@@ -16,38 +16,56 @@
 
 set -uo pipefail
 
-INTERVALL=8
+INTERVAL=8
 CONFIG="$HOME/.config/quickshell"
 
 # Namespaces that must be present. If one of them is missing the shell is not
 # functional, whatever the process status says.
-ERWARTET=(quickshell-bar quickshell-widgets quickshell-wallpaper)
+EXPECTED=(quickshell-bar quickshell-widgets quickshell-wallpaper)
 
-neustart() {
-    pkill -x qs 2>/dev/null
+# Returns 0 when every expected namespace is present.
+surfaces_present() {
+    local layers ns
+    layers=$(hyprctl layers 2>/dev/null)
+    [ -n "$layers" ] || return 0              # hyprctl did not answer; assume fine
+    for ns in "${EXPECTED[@]}"; do
+        printf '%s' "$layers" | grep -q "namespace: $ns" || return 1
+    done
+    return 0
+}
+
+restart_shell() {
+    # -x -f, NOT a bare -f. `pkill -f qs` matches any command line containing
+    # "qs", which includes the shell running this very script -- it killed the
+    # wrong process twice before the flags were tightened.
+    pkill -x -f "qs -c $CONFIG" 2>/dev/null
     sleep 2
     setsid qs -c "$CONFIG" >/dev/null 2>&1 < /dev/null &
-    # Then wait a little longer: building the surfaces takes a few seconds, and
-    # without this the next check would fire again immediately.
+    # Then wait longer than the check interval: building the surfaces takes a
+    # few seconds, and without this the next check would fire immediately and
+    # restart a shell that was still starting up.
     sleep 12
 }
 
 while true; do
-    sleep "$INTERVALL"
+    sleep "$INTERVAL"
 
     # With no compositor running there is nothing to check.
     hyprctl version >/dev/null 2>&1 || continue
 
-    layers=$(hyprctl layers 2>/dev/null)
-    [ -n "$layers" ] || continue             # hyprctl did not answer
+    surfaces_present && continue
 
-    fehlt=0
-    for n in "${ERWARTET[@]}"; do
-        printf '%s' "$layers" | grep -q "namespace: $n" || fehlt=1
-    done
+    # Confirm the fault a second time before acting on it.
+    #
+    # Restarting the shell deliberately -- by hand, or after a config change --
+    # briefly leaves zero layer surfaces, which looks exactly like the failure
+    # this watchdog exists to catch. Acting on the first observation started a
+    # SECOND Quickshell on top of the one just launched, and two instances each
+    # drawing a full set of surfaces cost several hundred megabytes. That
+    # happened. One interval of patience removes the whole race.
+    sleep "$INTERVAL"
+    surfaces_present && continue
 
-    [ "$fehlt" = 0 ] && continue
-
-    logger -t hypr-shell-guard "Shell-Flaechen fehlen, starte Quickshell neu"
-    neustart
+    logger -t hypr-shell-guard "shell surfaces missing, restarting Quickshell"
+    restart_shell
 done

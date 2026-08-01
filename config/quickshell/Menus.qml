@@ -29,6 +29,41 @@ Scope {
     property real anchorX: -1
     readonly property int barHeight: 40
 
+    // Keyboard selection index into the CURRENTLY FILTERED list, not into
+    // appList -- the filter changes what row 0 means, so an index into the
+    // unfiltered list would point at something the user cannot see.
+    property int selIndex: 0
+    // The filtered list, computed once here rather than in the Repeater's
+    // model binding. Enter and the arrow keys have to agree with what is on
+    // screen, and they cannot if each recomputes its own copy.
+    readonly property var filteredApps: {
+        const q = menus.query.toLowerCase();
+        const out = [];
+        for (let i = 0; i < menus.appList.length; i++) {
+            if (q.length === 0 || menus.appList[i].name.toLowerCase().indexOf(q) !== -1)
+                out.push(menus.appList[i]);
+            if (out.length >= 40) break;
+        }
+        return out;
+    }
+    // Mirrors the search field, so filteredApps can depend on it without
+    // reaching into a component declared much further down the file.
+    property string query: ""
+
+    function moveSel(d) {
+        const n = menus.filteredApps.length;
+        if (n === 0) return;
+        // Clamped, not wrapped: wrapping from the last row back to the first
+        // makes it easy to lose track of where you are in a long list.
+        menus.selIndex = Math.max(0, Math.min(n - 1, menus.selIndex + d));
+    }
+
+    function launchSel() {
+        const a = menus.filteredApps[menus.selIndex];
+        if (!a) return;
+        menus.run("/home/woofi/.local/bin/hypr-launch '" + a.wmclass + "' " + a.exec);
+    }
+
     property var appList: []
     property var wifiList: []
     property string wifiActive: ""
@@ -57,10 +92,25 @@ Scope {
         if (which === "wifi") { menus.wifiBusy = true; loadWifi.running = true; }
     }
 
-    Process { id: runner }
+    // Launch detached, NOT through a Process object.
+    //
+    // A Quickshell Process owns the thing it starts, and 0.3.0 has no opt-out
+    // (there is no manageLifetime property on Process in this version). Two
+    // things followed from that, and both were reported as the shell "closing
+    // everything":
+    //
+    //   * Editing any file under ~/.config/quickshell triggers a hot reload.
+    //     Reload destroys every QML object, the Process objects go with them,
+    //     and every application ever started from a menu is killed. A terminal
+    //     opened from the launcher died the moment a config file was touched.
+    //   * A single shared `runner` was reused for every launch, so starting a
+    //     second application tore down the first.
+    //
+    // execDetached hands the child to init and keeps no claim on it, which is
+    // the correct relationship: the shell starts applications, it does not own
+    // them.
     function run(cmd) {
-        runner.command = ["sh", "-c", cmd];
-        runner.running = true;
+        Quickshell.execDetached(["sh", "-c", cmd]);
         menus.active = "";
     }
 
@@ -75,48 +125,14 @@ Scope {
     // hypr-applist does the same work in one process (29 ms cold, 17 ms from
     // cache) and hypr-eventd publishes it retained, so the list is already here
     // before the menu is opened. Opening it now costs nothing at all.
-    Process {
-        id: loadApps
-
-        // A subscription that exits must come back.
-
-        //
-
-        // Quickshell does not restart a Process on its own, so when mosquitto_sub
-
-        // exited -- because the broker restarted, or simply because the shell won
-
-        // the race against it at login -- the subscription stayed dead for the whole
-
-        // session. The panel then kept showing its last received values forever,
-
-        // with no error anywhere. That is what froze the whole shell after the
-
-        // broker was restarted.
-
-        onExited: reconnect.start()
-
-        running: true
-        command: ["mosquitto_sub",
-                  "--unix", "/run/user/1000/mosquitto.sock",
-                  "-t", "hypr/apps",
-                  "-q", "0"]
-        stdout: SplitParser {
-            onRead: function (line) {
-                try {
-                    const d = JSON.parse(line.trim());
-                    if (d && d.apps) menus.appList = d.apps;
-                } catch (e) { /* keep the list we already have */ }
-            }
+    // The application list arrives on the shared Bus singleton. See Bus.qml.
+    Connections {
+        target: Bus
+        function onMessage(topic, d) {
+            if (topic === "hypr/apps" && d && d.apps) menus.appList = d.apps;
         }
     }
 
-    Timer {
-        id: reconnect
-        interval: 1000
-        repeat: false
-        onTriggered: loadApps.running = true
-    }
 
 
     // The cache file, read once at startup, BEFORE the bus is consulted.
@@ -220,7 +236,21 @@ Scope {
 
         WlrLayershell.layer: WlrLayer.Overlay
         WlrLayershell.namespace: "qs-menus"
-        WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
+        // Exclusive while open, for two separate reasons.
+        //
+        // OnDemand hands the keyboard over only when THIS surface is clicked.
+        // Every one of these menus is opened from the bar or from a keybind, so
+        // the click never lands here -- which meant the menu had no keyboard at
+        // all. Two consequences: Escape could not close it, and the search
+        // field could not be typed into until you clicked it first.
+        //
+        // Exclusive takes the keyboard the moment the surface appears, so the
+        // applications menu can be typed into immediately and Escape works
+        // everywhere. The cost is that Hyprland binds do not fire while a menu
+        // is open, so CTRL+ALT+S no longer toggles it shut -- Escape and a
+        // click outside are the close paths.
+        WlrLayershell.keyboardFocus: menuWin.open ? WlrKeyboardFocus.Exclusive
+                                                  : WlrKeyboardFocus.None
         exclusionMode: ExclusionMode.Ignore
         color: "transparent"
 
@@ -243,9 +273,17 @@ Scope {
             onTapped: menus.active = ""
         }
 
+        // Escape for the menus that have nothing to type into.
+        //
+        // Deliberately NOT active for "apps". This Item and the search field are
+        // siblings both declaring `focus`, and two claims in one focus scope
+        // means whichever binding re-evaluates last wins — which is how the
+        // search field ended up without the keyboard even when it looked
+        // focused. The apps menu carries its own Escape handler on the TextInput
+        // instead, so only one thing here ever asks for focus.
         Item {
             anchors.fill: parent
-            focus: menus.active !== ""
+            focus: menuWin.open && menus.active !== "apps"
             Keys.onEscapePressed: menus.active = ""
         }
 
@@ -301,14 +339,29 @@ Scope {
             x: menus.anchorX < 0
                ? 6
                : Math.max(6, Math.min(parent.width - width - 6, menus.anchorX - width / 2))
-            Behavior on x { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
-
             Behavior on y { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
+
             // Switching between applications and Wi-Fi moves the card to the
             // other side and changes its width at the same time. Without these
             // two transitions it jumped.
-            Behavior on x     { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
-            Behavior on width { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
+            //
+            // `enabled: menuWin.open` is what fixes the menu appearing in the
+            // wrong place the first time it is opened. x and width depend on
+            // which menu is active and on the trigger it was opened from, so
+            // opening a different menu than last time changes both. With the
+            // animation always on, the card was still standing at the PREVIOUS
+            // menu's position when it faded in, and slid across afterwards --
+            // it looked like it had spawned in the wrong spot. While the panel
+            // is closed the animation is off, so the new position is taken
+            // instantly and the card fades in already where it belongs. Once
+            // open, switching between menus animates as before.
+            //
+            // There used to be a SECOND `Behavior on x` a few lines up. Qt
+            // rejects the duplicate at runtime -- "Attempting to set another
+            // interceptor on QQuickRectangle property x - unsupported" in the
+            // log -- so which of the two won was not something to rely on.
+            Behavior on x     { enabled: menuWin.open; NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
+            Behavior on width { enabled: menuWin.open; NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
 
             width: menus.active === "apps" ? 460 : 340
             height: Math.min(parent.height - menus.barHeight - 40, body.implicitHeight + 26)
@@ -365,11 +418,56 @@ Scope {
                             font.pixelSize: 13
                             focus: menus.active === "apps"
                             clip: true
-                            onAccepted: {
-                                const hits = menus.appList.filter(a =>
-                                    a.name.toLowerCase().indexOf(text.toLowerCase()) !== -1);
-                                if (hits.length) menus.run(hits[0].exec);
+
+                            // The declarative `focus` above is not enough on its
+                            // own: the surface does not exist yet at the moment
+                            // `active` flips, so the claim is made against a
+                            // window that has no keyboard to give. Qt.callLater
+                            // defers it to after the surface is up.
+                            //
+                            // The text is cleared at the same time — reopening
+                            // the launcher and finding the previous query still
+                            // in it, with the list already filtered down, looked
+                            // like the search was broken.
+                            onVisibleChanged: if (visible) {
+                                search.text = "";
+                                menus.query = "";
+                                menus.selIndex = 0;
+                                Qt.callLater(search.forceActiveFocus);
                             }
+
+                            // Typing changes what row 0 means, so the selection
+                            // returns to the top. Leaving it where it was
+                            // pointed at an unrelated application after every
+                            // keystroke.
+                            onTextChanged: {
+                                menus.query = search.text;
+                                menus.selIndex = 0;
+                            }
+
+                            Keys.onEscapePressed: menus.active = ""
+
+                            // Arrow keys move the selection; the TextInput
+                            // would otherwise consume them as cursor movement,
+                            // which is useless on a single-line field.
+                            Keys.onUpPressed:   menus.moveSel(-1)
+                            Keys.onDownPressed: menus.moveSel(1)
+                            Keys.onPressed: function (e) {
+                                if (e.key === Qt.Key_Home)      { menus.selIndex = 0; e.accepted = true; }
+                                else if (e.key === Qt.Key_End)  { menus.selIndex = Math.max(0, menus.filteredApps.length - 1); e.accepted = true; }
+                                else if (e.key === Qt.Key_PageDown) { menus.moveSel(8);  e.accepted = true; }
+                                else if (e.key === Qt.Key_PageUp)   { menus.moveSel(-8); e.accepted = true; }
+                                // Tab moves the selection rather than focus:
+                                // there is nowhere else in this panel to focus.
+                                else if (e.key === Qt.Key_Tab)      { menus.moveSel(1);  e.accepted = true; }
+                                else if (e.key === Qt.Key_Backtab)  { menus.moveSel(-1); e.accepted = true; }
+                            }
+
+                            // Enter launches the SELECTED row, not
+                            // unconditionally the first one. Same launch path as
+                            // clicking it: hypr-launch raises a running instance
+                            // instead of starting a second copy.
+                            onAccepted: menus.launchSel()
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
                                 visible: search.text.length === 0
@@ -396,17 +494,14 @@ Scope {
 
                         // --- Applications ---
                         Repeater {
-                            model: menus.active !== "apps" ? [] :
-                                   menus.appList.filter(a =>
-                                       search.text.length === 0 ||
-                                       a.name.toLowerCase().indexOf(search.text.toLowerCase()) !== -1)
-                                   .slice(0, 40)
+                            model: menus.active !== "apps" ? [] : menus.filteredApps
                             delegate: MenuRow {
                                 required property var modelData
                                 required property int index
                                 label: modelData.name
                                 iconName: modelData.icon
                                 icon: 0xf0349
+                                selected: index === menus.selIndex
                                 stagger: Math.min(index * 16, 260)
                                 // hypr-launch raises an already running app
                                 // (switching workspace if needed) instead of
@@ -517,7 +612,10 @@ Scope {
         width: parent ? parent.width : 300
         height: 34
         radius: 11
-        color: hov.hovered ? Theme.surface1 : "transparent"
+        // Selected by keyboard, highlighted the same way as hover: both mean
+        // "this is the row Enter will act on", so they must not look different.
+        property bool selected: false
+        color: (hov.hovered || menuRow.selected) ? Theme.surface1 : "transparent"
         Behavior on color { ColorAnimation { duration: 90 } }
 
         HoverHandler { id: hov }
@@ -532,6 +630,22 @@ Scope {
             source: menuRow.iconName !== "" ? "image://icon/" + menuRow.iconName : ""
             fillMode: Image.PreserveAspectFit
             smooth: true
+            // Ask the icon provider for the size actually drawn.
+            //
+            // Without sourceSize, Quickshell requests 100x100 -- the log filled
+            // with "Could not load icon ... at size QSize(100, 100)", repeating
+            // on every refresh. Two costs: the theme may have no 100px variant
+            // of an icon it does have at 48, so the lookup fails and the row
+            // draws blank; and every success decoded a 100x100 RGBA buffer to
+            // paint 22x22.
+            //
+            // 44 is 2x the drawn size, which stays sharp on a scaled output and
+            // matches a size real icon themes actually ship.
+            sourceSize.width: 44
+            sourceSize.height: 44
+            // Themes disagree about which names they carry, and a missing icon
+            // is not an error worth logging on every repaint.
+            asynchronous: true
         }
 
         Text {

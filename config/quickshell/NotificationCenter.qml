@@ -22,8 +22,56 @@ Scope {
     property bool panelOpen: false
     property bool dnd: false
 
-    // Calendar navigation
-    property date viewDate: new Date()
+    // Calendar navigation.
+    //
+    // Derived from the shared CalendarData singleton rather than held here, so
+    // this calendar and the desktop widget can never drift onto different
+    // months. Paging goes through CalendarData.shiftMonth().
+    readonly property date viewDate: new Date(CalendarData.year, CalendarData.month, 1)
+
+    // Open whatever sent a notification, then close the centre.
+    //
+    // Three routes, most specific first:
+    //
+    //  1. The notification's own "default" action. This is what the desktop
+    //     notification spec means by activating a notification, and it is the
+    //     only route that lands somewhere useful -- a chat client opens the
+    //     conversation the message came from, not just the application.
+    //  2. Any other action, if the sender gave exactly one. Some applications
+    //     name their single action something other than "default".
+    //  3. desktopEntry, launched through hypr-launch, which raises an already
+    //     running instance instead of starting a second copy. This is the
+    //     fallback for senders that offer no actions at all.
+    //
+    // If none of the three apply there is genuinely nothing to open, and the
+    // double click does nothing rather than guessing from appName -- appName is
+    // free text and matching it against .desktop files launches the wrong
+    // program often enough to be worse than doing nothing.
+    function activate(n) {
+        if (!n) return;
+
+        const acts = n.actions || [];
+        for (let i = 0; i < acts.length; i++) {
+            if (acts[i].identifier === "default") {
+                acts[i].invoke();
+                nc.panelOpen = false;
+                return;
+            }
+        }
+        if (acts.length === 1) {
+            acts[0].invoke();
+            nc.panelOpen = false;
+            return;
+        }
+
+        const entry = (n.desktopEntry || "").replace(/\.desktop$/, "");
+        if (entry !== "") {
+            Quickshell.execDetached(["sh", "-c",
+                "/home/woofi/.local/bin/hypr-launch '" + entry
+                + "' gtk-launch " + entry]);
+            nc.panelOpen = false;
+        }
+    }
 
     // ---- Palette (Catppuccin Mocha) ---------------------------------------
     // Bound to Theme instead of hard-wired. This used to hold
@@ -159,10 +207,27 @@ Scope {
                 }
 
                 delegate: Rectangle {
+                    id: toastCard
                     required property var modelData
                     width: 440
                     height: Math.max(74, toastBody.implicitHeight + 26)
                     radius: 18
+
+                    // Same hover and double-click behaviour as the rows in the
+                    // centre: a toast is the first place you see a notification,
+                    // so it should be the first place you can act on it.
+                    scale: toastHov.hovered ? 1.015 : 1.0
+                    Behavior on scale { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+
+                    HoverHandler {
+                        id: toastHov
+                        cursorShape: Qt.PointingHandCursor
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        onDoubleClicked: nc.activate(toastCard.modelData)
+                    }
                     // The accent colour is the card's BASE surface. The
                     // previous approach -- a separate bar on the left -- stuck
                     // out of the rounding whatever corner radii were used.
@@ -244,6 +309,13 @@ Scope {
                                       : (modelData.appIcon !== "" ? "image://icon/" + modelData.appIcon : "")
                                 fillMode: Image.PreserveAspectFit
                                 smooth: true
+                                // See Menus.qml: without sourceSize the icon
+                                // provider is asked for 100x100, which fails
+                                // for icons the theme only ships smaller and
+                                // decodes far more than is drawn.
+                                sourceSize.width: 96
+                                sourceSize.height: 96
+                                asynchronous: true
                                 visible: source !== ""
                             }
                             Text {
@@ -312,7 +384,12 @@ Scope {
 
         WlrLayershell.layer: WlrLayer.Overlay
         WlrLayershell.namespace: "qs-notification-center"
-        WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
+        // Exclusive while open. OnDemand only grants the keyboard when THIS
+        // surface is clicked, but the centre is opened from the bar clock, so
+        // the click lands elsewhere and the Escape handler below could never
+        // fire. See Controls.qml for the full reasoning.
+        WlrLayershell.keyboardFocus: nc.panelOpen ? WlrKeyboardFocus.Exclusive
+                                                  : WlrKeyboardFocus.None
         exclusionMode: ExclusionMode.Ignore
         color: "transparent"
 
@@ -414,13 +491,31 @@ Scope {
                                 values: server.trackedNotifications.values.slice().reverse()
                             }
                             delegate: Rectangle {
+                                id: notifCard
                                 required property var modelData
                                 width: notifCol.width
                                 height: Math.max(62, itemRow.implicitHeight + 20)
                                 radius: 14
-                                color: Qt.rgba(nc.cBase.r, nc.cBase.g, nc.cBase.b, 0.9)
+
+                                // Hover: lift the surface, warm the border and
+                                // nudge it right by a pixel. All three on the
+                                // same short duration so it reads as one motion
+                                // rather than three separate reactions.
+                                color: rowHov.hovered
+                                       ? Qt.rgba(nc.cSurface0.r, nc.cSurface0.g, nc.cSurface0.b, 0.96)
+                                       : Qt.rgba(nc.cBase.r, nc.cBase.g, nc.cBase.b, 0.9)
                                 border.width: 1
-                                border.color: nc.cSurface0
+                                border.color: rowHov.hovered ? nc.cMauve : nc.cSurface0
+                                x: rowHov.hovered ? 2 : 0
+
+                                Behavior on color       { ColorAnimation  { duration: 120; easing.type: Easing.OutCubic } }
+                                Behavior on border.color{ ColorAnimation  { duration: 120; easing.type: Easing.OutCubic } }
+                                Behavior on x           { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+
+                                HoverHandler {
+                                    id: rowHov
+                                    cursorShape: Qt.PointingHandCursor
+                                }
 
 
                                 // Red X at the top right: deletes exactly this
@@ -474,6 +569,10 @@ Scope {
                                                   : (modelData.appIcon !== "" ? "image://icon/" + modelData.appIcon : "")
                                             fillMode: Image.PreserveAspectFit
                                             smooth: true
+                                            // See Menus.qml.
+                                            sourceSize.width: 96
+                                            sourceSize.height: 96
+                                            asynchronous: true
                                             visible: source !== ""
                                         }
                                         Text {
@@ -514,9 +613,18 @@ Scope {
                                     }
                                 }
 
+                                // Double click opens whatever sent the
+                                // notification; the red X deletes it.
+                                //
+                                // A single click used to dismiss, which is why
+                                // this is a doubleClick: the first click of a
+                                // double would have destroyed the delegate
+                                // before the second arrived, so the two cannot
+                                // coexist. Dismissing already has its own
+                                // dedicated button, so nothing is lost.
                                 MouseArea {
                                     anchors.fill: parent
-                                    onClicked: modelData.dismiss()
+                                    onDoubleClicked: nc.activate(notifCard.modelData)
                                 }
                             }
                         }
@@ -619,9 +727,7 @@ Scope {
                             anchors.fill: parent
                             anchors.margins: -8
                             onClicked: {
-                                const d = new Date(nc.viewDate);
-                                d.setMonth(d.getMonth() - 1);
-                                nc.viewDate = d;
+                                CalendarData.shiftMonth(-1);
                             }
                         }
                     }
@@ -644,9 +750,7 @@ Scope {
                             anchors.fill: parent
                             anchors.margins: -8
                             onClicked: {
-                                const d = new Date(nc.viewDate);
-                                d.setMonth(d.getMonth() + 1);
-                                nc.viewDate = d;
+                                CalendarData.shiftMonth(1);
                             }
                         }
                     }
@@ -706,6 +810,7 @@ Scope {
                                 color: parent.isToday ? nc.cMauve : "transparent"
                             }
                             Text {
+                                id: dayNum
                                 anchors.centerIn: parent
                                 text: parent.cellDate.getDate()
                                 color: parent.isToday ? nc.cCrust
@@ -713,6 +818,34 @@ Scope {
                                 font.family: nc.uiFont
                                 font.pixelSize: 12
                                 font.weight: parent.isToday ? Font.Bold : Font.Normal
+                            }
+
+                            // Event dots -- the whole point of the exercise.
+                            //
+                            // This grid previously had no data behind it at
+                            // all, so no appointment could ever show up here
+                            // however long you waited. The events now come from
+                            // the shared CalendarData singleton, which is the
+                            // same fetch and the same cache the desktop widget
+                            // reads, so the two can never disagree.
+                            Row {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                anchors.top: dayNum.bottom
+                                anchors.topMargin: -3
+                                spacing: 2
+                                visible: parent.inMonth
+
+                                Repeater {
+                                    // At most three, otherwise a busy day pushes
+                                    // the dots wider than the cell.
+                                    model: Math.min(
+                                        3, CalendarData.eventsFor(
+                                            CalendarData.dayKey(cellDate)).length)
+                                    delegate: Rectangle {
+                                        width: 3; height: 3; radius: 1.5
+                                        color: isToday ? nc.cCrust : nc.cMauve
+                                    }
+                                }
                             }
                         }
                     }

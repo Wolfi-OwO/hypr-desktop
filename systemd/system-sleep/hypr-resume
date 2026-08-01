@@ -1,0 +1,58 @@
+#!/bin/sh
+# Refresh the desktop's cached state when the machine wakes up.
+#
+# Nothing runs while the machine is actually suspended, so there is no such
+# thing as "updating during standby". What is possible is running the moment it
+# comes back, so the widgets are already correct rather than a tick stale.
+#
+# systemd runs every executable in this directory as root, with:
+#   $1 = pre|post   $2 = suspend|hibernate|hybrid-sleep|suspend-then-hibernate
+#
+# THIS HOOK MUST RETURN IMMEDIATELY.
+#
+# systemd-sleep does not thaw user.slice until every hook in this directory has
+# exited. A hook that blocks does not merely delay itself -- it holds the entire
+# user session frozen, with the screen up and nothing responding to input.
+#
+# That is exactly what happened. Measured from the journal on 2026-08-01:
+#
+#   17:13:36  kernel resumed, all hardware back (i915, nvme) in under a second
+#   17:13:45  last log line, then silence
+#   17:15:06  "Successfully thawed unit 'user.slice'"
+#   17:15:08  "Operation 'suspend' finished"
+#
+# Ninety-two seconds of frozen desktop, none of it kernel or hardware. The
+# previous version of this file caused it. It used
+#
+#     systemctl --machine="user@.host" --user --no-block start ...
+#
+# and --no-block does not help there: it only means "do not wait for the unit to
+# finish". Establishing the --machine connection through systemd-machined is
+# itself synchronous and can stall for a long D-Bus timeout before failing, and
+# only then did the runuser fallback run, adding a full PAM session setup on top.
+#
+# So the work is now detached outright. setsid puts it in its own session so it
+# cannot be waited on, and timeout bounds it even if the user manager is wedged.
+
+[ "$1" = "post" ] || exit 0
+
+# Resolve the graphical user rather than hardcoding a uid: this file appears in
+# the public repository's troubleshooting notes and should not assume 1000.
+USER_NAME=$(loginctl list-sessions --no-legend 2>/dev/null \
+            | awk '$3 != "" && $3 != "root" { print $3; exit }')
+[ -n "$USER_NAME" ] || exit 0
+USER_UID=$(id -u "$USER_NAME" 2>/dev/null) || exit 0
+
+# Detached and bounded:
+#   setsid    new session, so systemd-sleep cannot end up waiting on it
+#   &         returns to the hook immediately
+#   timeout   a wedged user manager cannot leave this hanging around
+#
+# No --machine. Talking to the user manager directly through its own
+# XDG_RUNTIME_DIR needs no machined and cannot stall on that transport.
+setsid timeout 30 runuser -u "$USER_NAME" -- \
+    env "XDG_RUNTIME_DIR=/run/user/${USER_UID}" \
+    systemctl --user --no-block start hypr-resume-refresh.service \
+    >/dev/null 2>&1 &
+
+exit 0

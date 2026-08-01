@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily restic backup
+
+[Timer]
+OnCalendar=daily
+# A missed run catches up on the next boot instead of being skipped -- a laptop
+# that was off at the scheduled time would otherwise never back up.
+Persistent=true
+# Spread out, so login is not competing with a backup.
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=default.target

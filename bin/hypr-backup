@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Backs up the home directory with restic.
+#
+# DESTINATION
+# -----------
+# /var/backups/restic, on the same NVMe as the data it protects. That is a
+# deliberate first stage, not an oversight: this machine has one disk and no
+# external media, and a local repository already defends against the loss that
+# actually happens most -- deleting or mangling a file and noticing later.
+#
+# It does NOT survive the disk failing. Adding an offsite copy is one line:
+#
+#     restic -r sftp:user@host:/srv/backup copy --from-repo /var/backups/restic
+#
+# or point RESTIC_REPOSITORY at a remote and re-run. The repository format is
+# identical either way, so nothing here changes when that happens.
+#
+# ENCRYPTION
+# ----------
+# restic encrypts everything, always. The key lives in
+# ~/.config/restic/password, mode 600, generated from /dev/urandom. Losing that
+# file means losing the backups -- it is not derivable from anything else.
+#
+# SCHEDULE
+# --------
+# Daily via hypr-backup.timer, with Persistent=true so a missed run catches up
+# rather than being skipped -- a laptop that was off at the scheduled time would
+# otherwise never back up at all.
+#
+# Deliberately NOT gated on ConditionACPower. That gate suits the package
+# prefetch, which is pure convenience and can wait for mains; a backup that
+# silently skips every day the laptop happens to be on battery is a backup that
+# is not there when it is needed. The cost is bounded instead: Nice=19 and
+# idle-class I/O, so it yields to anything the user is actually doing, and the
+# repository is local so there is no radio involved.
+
+set -uo pipefail
+
+export RESTIC_REPOSITORY="${RESTIC_REPOSITORY:-/var/backups/restic}"
+export RESTIC_PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-$HOME/.config/restic/password}"
+
+# Excludes.
+#
+# The rule applied here: anything that can be regenerated from something else is
+# not data. Caches, build output, virtual environments and downloaded
+# dependencies all reproduce from a manifest that IS backed up, and together
+# they are far larger than the real content.
+#
+# The repository itself is excluded for the obvious reason -- backing a
+# repository up into itself grows without bound.
+EXCLUDES=(
+    --exclude "/var/backups/restic"
+    --exclude "$HOME/.cache"
+    --exclude "$HOME/.local/share/Trash"
+    # Root-owned trees living inside $HOME. restic runs as the user and cannot
+    # read these, so every run logged permission errors and exited with a
+    # warning -- which trains you to ignore the warning, which is how a real
+    # failure gets missed. Container volumes and paru's build root are both
+    # regenerable anyway.
+    --exclude "$HOME/.local/share/containers"
+    --exclude "$HOME/documents/packet-managers/paru/pkg"
+    --exclude "$HOME/.local/state/nvim/undo"
+    --exclude "$HOME/.local/share/Steam"
+    --exclude "$HOME/.var/app/*/cache"
+    # Build output and dependency trees: regenerated from lockfiles.
+    --exclude "**/node_modules"
+    --exclude "**/.venv"
+    --exclude "**/venv"
+    --exclude "**/__pycache__"
+    --exclude "**/target/debug"
+    --exclude "**/target/release"
+    --exclude "**/.gradle"
+    --exclude "**/build/intermediates"
+    # VM disk images: tens of gigabytes that change wholesale on every boot of
+    # the guest, and restic cannot deduplicate them usefully.
+    --exclude "$HOME/.local/share/libvirt/images"
+    --exclude "/var/lib/libvirt/images"
+    # Caches that announce themselves. Respected wherever they appear.
+    --exclude-caches
+)
+
+echo "== backup started $(date '+%Y-%m-%d %H:%M:%S') =="
+
+restic backup "$HOME" "${EXCLUDES[@]}" \
+    --tag automatic \
+    --exclude-file /dev/null \
+    || { echo "backup FAILED"; exit 1; }
+
+# Retention. Enough history to recover from a mistake noticed late, without the
+# repository growing forever.
+echo "== pruning =="
+restic forget \
+    --keep-daily 7 \
+    --keep-weekly 5 \
+    --keep-monthly 12 \
+    --prune \
+    || echo "prune failed (the backup itself succeeded)"
+
+# A backup that has never been verified is a guess. check --read-data-subset
+# reads and verifies a slice of the actual pack files, so bit rot is found here
+# rather than during a restore.
+echo "== verifying a 5% slice =="
+restic check --read-data-subset=5% || echo "VERIFY FAILED -- repository may be damaged"
+
+echo "== done $(date '+%Y-%m-%d %H:%M:%S') =="

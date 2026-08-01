@@ -1,0 +1,12 @@
+[Unit]
+Description=restic backup of the home directory
+# No network dependency: the repository is local. When an offsite copy is
+# added, this wants network-online.target as well.
+
+[Service]
+Type=oneshot
+ExecStart=/home/woofi/.local/bin/hypr-backup
+# Backups must never make the machine feel slow. Lowest CPU priority and
+# idle-class I/O, so this yields to anything the user is actually doing.
+Nice=19
+IOSchedulingClass=idle

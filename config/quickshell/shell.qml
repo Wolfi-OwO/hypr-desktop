@@ -123,6 +123,20 @@ ShellRoot {
                     source: "file:///home/woofi/.local/share/backgrounds/flag-mesh-light-2880x1800.png"
                     fillMode: Image.PreserveAspectCrop
                     cache: true
+                    // Decode at SCREEN size, not at the file's 2880x1800.
+                    //
+                    // Without this, Qt decodes the full image and keeps it as
+                    // uncompressed RGBA: 2880 x 1800 x 4 = 20.7 MB. Both
+                    // variants are held at once so they can cross-fade, so the
+                    // pair cost 41.5 MB of the shell's baseline -- to draw on a
+                    // 1440x900 panel that can show a quarter of those pixels.
+                    //
+                    // The file and the screen share the same 1.6 aspect ratio,
+                    // so this loses nothing at all: it is the downscale the GPU
+                    // was doing on every frame anyway, done once at decode
+                    // time. 5.2 MB each instead of 20.7 MB.
+                    sourceSize.width: bg.width
+                    sourceSize.height: bg.height
                     // Only the ACTIVE variant's image is loaded synchronously.
                     // This used to say `false` twice, so two 2880x1800 images
                     // were decoded and pushed to the GPU at startup before
@@ -142,6 +156,9 @@ ShellRoot {
                     source: "file:///home/woofi/.local/share/backgrounds/flag-mesh-2880x1800.png"
                     fillMode: Image.PreserveAspectCrop
                     cache: true
+                    // See lightWall: decode at screen size, not 2880x1800.
+                    sourceSize.width: bg.width
+                    sourceSize.height: bg.height
                     asynchronous: !Theme.dark
                     opacity: Theme.dark ? 1 : 0
                     Behavior on opacity {
@@ -205,7 +222,11 @@ ShellRoot {
             property string battState: ""
             property string uptime: "—"
 
-            property var wx: ({ place: "", temp: "—", icon: "",
+            // Placeholder only -- the real place name arrives with the
+            // weather payload a moment later. A dash rather than a hardcoded
+            // village keeps the published config free of the author's home
+            // location, matching the generic coordinates in hypr-weather.
+            property var wx: ({ place: "—", temp: "—", icon: "",
                                 desc: "…", wind: "—", humidity: "—",
                                 hourly: [], daily: [], stale: false })
 
@@ -301,56 +322,22 @@ ShellRoot {
             // subscriptions rather than one: the battery lives on its own topic
             // because the bar and this card both want it and neither should
             // wake for the other's changes.
-            Process {
-                id: stats
-
-                // A subscription that exits must come back.
-
-                //
-
-                // Quickshell does not restart a Process on its own, so when mosquitto_sub
-
-                // exited -- because the broker restarted, or simply because the shell won
-
-                // the race against it at login -- the subscription stayed dead for the whole
-
-                // session. The panel then kept showing its last received values forever,
-
-                // with no error anywhere. That is what froze the whole shell after the
-
-                // broker was restarted.
-
-                onExited: reconnectStats.start()
-
-                running: true
-                command: ["mosquitto_sub",
-                          "--unix", "/run/user/1000/mosquitto.sock",
-                          "-t", "hypr/system", "-t", "hypr/battery",
-                          "-q", "0"]
-                stdout: SplitParser {
-                    onRead: function (line) {
-                        try {
-                            const d = JSON.parse(line.trim());
-                            // One handler for both topics: each message carries
-                            // only its own keys, so anything absent is left as
-                            // it was rather than being cleared.
-                            if (d.cpu !== undefined)     root.cpuPct   = d.cpu + "%";
-                            if (d.mem !== undefined)     root.memUsed  = d.mem + " GB";
-                            if (d.temp !== undefined)    root.tempC    = d.temp + "\u00b0C";
-                            if (d.uptime !== undefined)  root.uptime   = d.uptime;
-                            if (d.batt !== undefined)    root.battPct  = d.batt + "%";
-                            if (d.battState !== undefined) root.battState = d.battState;
-                        } catch (e) { /* keep the previous readings */ }
-                    }
+            // Values arrive on the shared Bus singleton. See Bus.qml.
+            Connections {
+                target: Bus
+                function onMessage(topic, d) {
+                    // One handler for several topics: each message carries only
+                    // its own keys, so anything absent is left as it was rather
+                    // than being cleared.
+                    if (d.cpu !== undefined)       root.cpuPct    = d.cpu + "%";
+                    if (d.mem !== undefined)       root.memUsed   = d.mem + " GB";
+                    if (d.temp !== undefined)      root.tempC     = d.temp + "\u00b0C";
+                    if (d.uptime !== undefined)    root.uptime    = d.uptime;
+                    if (d.batt !== undefined)      root.battPct   = d.batt + "%";
+                    if (d.battState !== undefined) root.battState = d.battState;
                 }
             }
 
-            Timer {
-                id: reconnectStats
-                interval: 1000
-                repeat: false
-                onTriggered: stats.running = true
-            }
 
 
             // The cached reading, straight off disk at startup.
@@ -371,90 +358,18 @@ ShellRoot {
             // ~/.cache/hypr immediately, without touching the network.
 
 
-            Process {
-
-
-                id: weatherFromFile
-
-
-                running: true
-
-
-                command: ["/home/woofi/.local/bin/hypr-weather"]
-
-
-                stdout: StdioCollector {
-
-
-                    onStreamFinished: {
-
-
-                        if (root.wx && root.wx.place) return;   // the bus got there first
-
-
-                        try {
-
-
-                            const d = JSON.parse(this.text);
-
-
-                            if (d && d.place) root.wx = d;
-
-
-                        } catch (e) { /* the bus is the other path */ }
-
-
-                    }
-
-
-                }
-
-
-            }
-
-
-
-            Process {
-                id: weather
-
-
-                // Subscribed, not fetched on a 300 s timer.
-                //
-                // The fetch itself moved into hypr-eventd, on its own thread so
-                // a hanging HTTP request cannot stall anything else. What that
-                // buys here is the retained message: it arrives the instant
-                // this subscribes, so the card shows a real reading on the
-                // first frame after login instead of the placeholder dashes.
-                // A subscription that exits must come back.
-                //
-                // Quickshell does not restart a Process on its own, so when mosquitto_sub
-                // exited -- because the broker restarted, or simply because the shell won
-                // the race against it at login -- the subscription stayed dead for the whole
-                // session. The panel then kept showing its last received values forever,
-                // with no error anywhere. That is what froze the whole shell after the
-                // broker was restarted.
-                onExited: reconnectWeather.start()
-                running: true
-                command: ["mosquitto_sub",
-                          "--unix", "/run/user/1000/mosquitto.sock",
-                          "-t", "hypr/weather",
-                          "-q", "0"]
-                stdout: SplitParser {
-                    onRead: function (line) {
-                        try {
-                            const d = JSON.parse(line.trim());
-                            if (d && d.place) root.wx = d;
-                        } catch (e) { /* keep the previous reading */ }
-                    }
+            // Weather arrives on the shared Bus singleton. See Bus.qml.
+            Connections {
+                target: Bus
+                function onMessage(topic, d) {
+                    if (topic === "hypr/weather" && d && d.place) root.wx = d;
                 }
             }
 
-            Timer {
-                id: reconnectWeather
-                interval: 1000
-                repeat: false
-                onTriggered: weather.running = true
-            }
+
+
+
+
 
 
 
@@ -928,6 +843,21 @@ ShellRoot {
                         playing: parent.animated
                         cache: true
                         asynchronous: true
+                        // Decode at roughly twice the drawn size, not at the
+                        // file's own resolution.
+                        //
+                        // These frames are 150x150. The sources are not:
+                        // 03.png is 1937x1903 and decodes to 14.1 MB, 02.png is
+                        // 1999x704 for 5.4 MB, and 01.gif is 500x500 across 14
+                        // frames, all of which are held at once, for 13.4 MB.
+                        // That is 32.8 MB of RGBA to draw three thumbnails that
+                        // between them need about 0.26 MB.
+                        //
+                        // 300x300 is 2x the drawn size, which keeps the crop
+                        // and any future scaling sharp while cutting the cost
+                        // by more than 95%.
+                        sourceSize.width: 300
+                        sourceSize.height: 300
                     }
                 }
 

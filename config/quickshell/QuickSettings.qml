@@ -80,60 +80,24 @@ Scope {
     // battery percentage and then corrected itself a moment later. These are
     // retained topics, so the values are already current when the panel opens
     // and there is nothing to wait for.
-    Process {
-        id: busSub
-
-        // A subscription that exits must come back.
-
-        //
-
-        // Quickshell does not restart a Process on its own, so when mosquitto_sub
-
-        // exited -- because the broker restarted, or simply because the shell won
-
-        // the race against it at login -- the subscription stayed dead for the whole
-
-        // session. The panel then kept showing its last received values forever,
-
-        // with no error anywhere. That is what froze the whole shell after the
-
-        // broker was restarted.
-
-        onExited: reconnect.start()
-
-        running: true
-        command: ["mosquitto_sub",
-                  "--unix", "/run/user/1000/mosquitto.sock",
-                  "-t", "hypr/power", "-t", "hypr/theme", "-t", "hypr/battery",
-                  "-q", "0"]
-        stdout: SplitParser {
-            onRead: function (line) {
-                try {
-                    const d = JSON.parse(line.trim());
-                    // Each message carries only its own topic's keys, so an
-                    // absent field means "unchanged", not "empty".
-                    if (d.profile !== undefined)   qs.profile   = d.profile;
-                    if (d.dark !== undefined)      qs.scheme    = d.dark ? "prefer-dark" : "prefer-light";
-                    if (d.batt !== undefined)      qs.battPct   = "" + d.batt;
-                    if (d.battState !== undefined) qs.battState = d.battState;
-                } catch (e) { /* keep the previous values */ }
-            }
+    // Values arrive on the shared Bus singleton. See Bus.qml.
+    Connections {
+        target: Bus
+        function onMessage(topic, d) {
+            // Each message carries only its own topic's keys, so an absent
+            // field means "unchanged", not "empty".
+            if (d.profile !== undefined)   qs.profile   = d.profile;
+            if (d.dark !== undefined)      qs.scheme    = d.dark ? "prefer-dark" : "prefer-light";
+            if (d.batt !== undefined)      qs.battPct   = "" + d.batt;
+            if (d.battState !== undefined) qs.battState = d.battState;
         }
     }
 
-    Timer {
-        id: reconnect
-        interval: 1000
-        repeat: false
-        onTriggered: busSub.running = true
-    }
 
 
-    Process { id: runner }
-    function run(cmd) {
-        runner.command = ["sh", "-c", cmd];
-        runner.running = true;
-    }
+    // Detached: see the note in Menus.qml. A reload must not kill what the
+    // shell started.
+    function run(cmd) { Quickshell.execDetached(["sh", "-c", cmd]); }
 
 
     // =======================================================================
@@ -149,7 +113,12 @@ Scope {
 
         WlrLayershell.layer: WlrLayer.Overlay
         WlrLayershell.namespace: "qs-quick-settings"
-        WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
+        // Exclusive while open. OnDemand only grants the keyboard when THIS
+        // surface is clicked, but the panel is opened from the bar, so the
+        // click lands elsewhere and the Escape handler below could never fire.
+        // See Controls.qml for the full reasoning.
+        WlrLayershell.keyboardFocus: qs.panelOpen ? WlrKeyboardFocus.Exclusive
+                                                  : WlrKeyboardFocus.None
         exclusionMode: ExclusionMode.Ignore
         color: "transparent"
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=Idle management for Hyprland
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/hypridle
+Restart=on-failure
+
+[Install]
+# NOT graphical-session.target: it is never activated under Hyprland, which is
+# what left several units in this session silently never starting.
+WantedBy=default.target

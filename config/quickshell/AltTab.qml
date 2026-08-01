@@ -112,8 +112,9 @@ Scope {
         }
     }
 
-    Process { id: runner }
-    function run(cmd) { runner.command = ["sh", "-c", cmd]; runner.running = true; }
+    // Detached: see the note in Menus.qml. A reload must not kill what the
+    // shell started.
+    function run(cmd) { Quickshell.execDetached(["sh", "-c", cmd]); }
 
     function step(dir) {
         if (!at.shown) {
