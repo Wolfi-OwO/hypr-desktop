@@ -1,4 +1,5 @@
 [Unit]
+StartLimitIntervalSec=0
 Description=Idle management for Hyprland
 PartOf=graphical-session.target
 
@@ -6,6 +7,7 @@ PartOf=graphical-session.target
 Type=simple
 ExecStart=/usr/bin/hypridle
 Restart=on-failure
+RestartSec=2
 
 [Install]
 # NOT graphical-session.target: it is never activated under Hyprland, which is
