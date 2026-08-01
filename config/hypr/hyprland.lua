@@ -545,6 +545,13 @@ hl.bind(mainMod .. " + B",      hl.dsp.exec_cmd(browser))
 hl.bind(mainMod .. " + R",      hl.dsp.exec_cmd("qs ipc call menu apps"))
 
 -- ---- Tiling-specific ---------------------------------------------------
+-- Arbeitsflaechen-Uebersicht -- das GNOME-Activities-Aequivalent.
+--
+-- SUPER allein waere die naheliegende Taste, laesst sich unter Hyprland aber
+-- nicht sinnvoll binden: mainMod ist der Modifikator fuer Dutzende anderer
+-- Bindungen, ein Einzeldruck darauf ist von deren Beginn nicht zu trennen.
+hl.bind(mainMod .. " + Tab", hl.dsp.exec_cmd("qs ipc call overview toggle"))
+
 hl.bind(mainMod .. " + V", hl.dsp.window.float({ action = "toggle" }))
 hl.bind(mainMod .. " + P", hl.dsp.window.pseudo())
 hl.bind(mainMod .. " + J", hl.dsp.layout("togglesplit"))

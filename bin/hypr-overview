@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Workspaces and their windows as JSON, for the overview panel.
+
+Reads hyprctl rather than the Quickshell Hyprland module: that module registers
+its types at runtime, so its API cannot be checked before writing against it,
+and guessing property names is how the last few panels acquired bugs. hyprctl's
+JSON is a stable, inspectable interface.
+
+Output: {"active": 1, "workspaces": [{"id":1,"name":"1","windows":[
+         {"title":..., "class":..., "address":..., "focused":bool}]}]}
+
+Workspaces 1..N are always present even when empty, so the grid does not
+reshuffle as they come and go -- a switcher whose targets move while you look
+at it is worse than no switcher.
+"""
+
+import json
+import subprocess
+import sys
+
+MIN_WORKSPACES = 6      # always offer this many, even if unused
+
+
+def hypr(*args):
+    try:
+        r = subprocess.run(["hyprctl", "-j", *args],
+                           capture_output=True, text=True, timeout=3)
+        return json.loads(r.stdout) if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def main():
+    ws = hypr("workspaces") or []
+    clients = hypr("clients") or []
+    active = hypr("activeworkspace") or {}
+    activew = hypr("activewindow") or {}
+    focused_addr = activew.get("address", "")
+
+    by_ws = {}
+    for c in clients:
+        wid = (c.get("workspace") or {}).get("id")
+        if wid is None:
+            continue
+        by_ws.setdefault(wid, []).append({
+            "title": (c.get("title") or "")[:60],
+            "class": c.get("class") or "",
+            "address": c.get("address") or "",
+            "focused": c.get("address") == focused_addr,
+        })
+
+    ids = sorted({w["id"] for w in ws if w["id"] > 0}
+                 | set(range(1, MIN_WORKSPACES + 1)))
+    names = {w["id"]: w.get("name", str(w["id"])) for w in ws}
+
+    out = {
+        "active": active.get("id", 1),
+        "workspaces": [
+            {"id": i, "name": names.get(i, str(i)), "windows": by_ws.get(i, [])}
+            for i in ids
+        ],
+    }
+    json.dump(out, sys.stdout, ensure_ascii=False)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

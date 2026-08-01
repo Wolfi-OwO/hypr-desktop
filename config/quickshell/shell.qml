@@ -46,6 +46,9 @@ ShellRoot {
     // Now playing. The media keys were bound but nothing showed what they act on.
     MediaPanel { id: mediaPanel }
 
+    // Workspace overview -- the biggest thing lost leaving GNOME.
+    Overview { id: overview }
+
     // Top bar. Replaces waybar -- see the header of Bar.qml: waybar reloads
     // itself on every colour-scheme change and visibly disappears for around
     // 100 ms while doing so. Here the colours are bound to Theme and animate
