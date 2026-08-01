@@ -1,0 +1,6 @@
+[Unit]
+Description=Apply the colour temperature due for this weekday and hour
+
+[Service]
+Type=oneshot
+ExecStart=/home/woofi/.local/bin/hypr-sunset-scheduler

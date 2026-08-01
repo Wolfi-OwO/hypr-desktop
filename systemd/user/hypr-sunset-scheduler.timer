@@ -1,0 +1,13 @@
+[Unit]
+Description=Colour temperature schedule
+
+[Timer]
+# Every 10 minutes, and once at start. The schedule only changes on the hour, so
+# this bounds how late a boundary can land at 10 minutes; applying is idempotent
+# so the extra runs cost nothing.
+OnBootSec=30s
+OnUnitActiveSec=10min
+AccuracySec=1min
+
+[Install]
+WantedBy=default.target

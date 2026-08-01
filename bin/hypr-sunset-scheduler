@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Apply the colour temperature for the current weekday and hour.
+
+WHY THIS EXISTS
+---------------
+hyprsunset.conf has NO concept of weekdays. Its format is one flat list of
+`profile { time = HH:MM; temperature = K }` that applies to every day alike.
+A schedule that differs between weekday and weekend therefore cannot be
+expressed in it at all, so the logic has to live outside hyprsunset.
+
+This reads ~/.config/hypr/sunset-schedule.json, works out which entry applies
+right now, and pushes it in with `hyprctl hyprsunset temperature N`.
+
+IMPORTANT: hyprsunset must run WITHOUT its own profiles when this is active.
+Two schedules driving the same daemon fight each other -- whichever fired last
+wins, and the result flickers between them at every boundary.
+
+Run as a timer (see hypr-sunset-scheduler.timer). Idempotent: it re-applies the
+same value harmlessly, so the interval only bounds how late a change can land.
+
+    hypr-sunset-scheduler            apply what is due now
+    hypr-sunset-scheduler --show     print what would be applied, change nothing
+"""
+
+import datetime
+import json
+import os
+import subprocess
+import sys
+
+CONF = os.path.expanduser("~/.config/hypr/sunset-schedule.json")
+DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def load():
+    try:
+        with open(CONF, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"cannot read {CONF}: {e}", file=sys.stderr)
+        return None
+
+
+def due(cfg, now):
+    """Temperature in force at `now`, or None if the schedule is off/empty.
+
+    The applicable entry is the LAST one whose hour has already passed today.
+    Before the first entry of the day, the day is not yet "started" -- so the
+    last entry of the PREVIOUS day still applies. Without that wrap-around,
+    01:00 would fall through to no value at all and the night setting would be
+    dropped in the middle of the night, which is exactly when it matters.
+    """
+    if not cfg.get("enabled", True):
+        return None
+
+    days = cfg.get("days", {})
+    today = DAYS[now.weekday()]
+    entries = sorted(days.get(today, []), key=lambda e: e["h"])
+
+    applicable = [e for e in entries if e["h"] <= now.hour]
+    if applicable:
+        return applicable[-1]["temp"]
+
+    # Before today's first entry: carry the previous day's last one over.
+    for back in range(1, 8):
+        prev = DAYS[(now.weekday() - back) % 7]
+        prev_entries = sorted(days.get(prev, []), key=lambda e: e["h"])
+        if prev_entries:
+            return prev_entries[-1]["temp"]
+    return None
+
+
+def main():
+    cfg = load()
+    if cfg is None:
+        return 1
+
+    now = datetime.datetime.now()
+    temp = due(cfg, now)
+
+    if "--show" in sys.argv:
+        day = DAYS[now.weekday()]
+        print(f"  {day} {now.hour:02d}:xx  ->  "
+              f"{'disabled' if temp is None else str(temp) + 'K'}")
+        return 0
+
+    if temp is None:
+        # Disabled: reset the matrix rather than approximating daylight, so the
+        # colours are genuinely untouched.
+        subprocess.run(["hyprctl", "dispatch", "exec", "hyprctl hyprsunset identity"],
+                       capture_output=True)
+        subprocess.run(["hyprctl", "hyprsunset", "identity"], capture_output=True)
+        return 0
+
+    r = subprocess.run(["hyprctl", "hyprsunset", "temperature", str(temp)],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"hyprctl failed: {r.stderr.strip()}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
