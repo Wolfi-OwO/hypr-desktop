@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Rescale hyprlock's widget geometry by a factor.
+
+WHY THIS EXISTS
+---------------
+hyprlock draws in PHYSICAL pixels. This panel is 2880x1800 at scale 2, while the
+SDDM greeter's theme is a 1440x900 LOGICAL design that the display scales up. So
+the same numbers in the two configs do not produce the same apparent size, and
+finding the factor that makes the lock screen match the greeter took several
+tries: 1x read as far too small, 2x as too large, 1.7x as still too large.
+
+Guessing by hand meant editing twenty-odd values each round and risked scaling
+the fonts without the boxes they sit in. This does the whole set at once, and
+always from the 1x DESIGN baseline rather than from the current file, so
+repeated adjustments cannot accumulate rounding error.
+
+    hypr-lock-scale 1.4        write hyprlock.conf at 1.4x
+    hypr-lock-scale 1.4 --show print the values, change nothing
+
+The baseline lives in hyprlock.conf.design. Everything outside the scaled keys --
+colours, paths, comments, layout structure -- is copied through untouched.
+"""
+
+import re
+import shutil
+import sys
+
+CONF = "/home/woofi/.config/hypr/hyprlock.conf"
+BASE = "/home/woofi/.config/hypr/hyprlock.conf.design"
+
+# Only geometry. Ratios (dots_size, dots_spacing) and sentinels (rounding = -1,
+# border_size = 0) must not be touched -- -1 means "fully round", not a length.
+KEYS = {"font_size", "shadow_size", "outline_thickness", "rounding", "size", "position"}
+
+
+def rescale(text, factor):
+    out = []
+    for line in text.split("\n"):
+        m = re.match(r"^(\s*)(\w+)\s*=\s*([^#]*?)(\s*#.*)?$", line)
+        if not m:
+            out.append(line)
+            continue
+        indent, key, value, comment = m.group(1), m.group(2), m.group(3).strip(), m.group(4) or ""
+        if key not in KEYS:
+            out.append(line)
+            continue
+        if key == "rounding" and value == "-1":
+            out.append(line)
+            continue
+        parts = [p.strip() for p in value.split(",")]
+        if not all(re.fullmatch(r"-?\d+", p) for p in parts):
+            out.append(line)
+            continue
+        if all(int(p) == 0 for p in parts):
+            out.append(line)          # 0 stays 0; scaling it is meaningless
+            continue
+        scaled = ", ".join(str(int(round(int(p) * factor))) for p in parts)
+        out.append(f"{indent}{key} = {scaled}{comment}")
+    return "\n".join(out)
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        return 1
+    try:
+        factor = float(sys.argv[1])
+    except ValueError:
+        print(f"not a number: {sys.argv[1]}")
+        return 1
+    if not 0.5 <= factor <= 4.0:
+        print(f"refusing {factor}: outside the sane range 0.5-4.0")
+        return 1
+
+    try:
+        base = open(BASE, encoding="utf-8").read()
+    except OSError:
+        print(f"missing baseline {BASE} -- restore it from git before scaling")
+        return 1
+
+    result = rescale(base, factor)
+
+    if result.count("{") != result.count("}"):
+        print("brace mismatch after scaling; refusing to write")
+        return 1
+
+    if "--show" in sys.argv:
+        for line in result.split("\n"):
+            if re.match(r"^\s*(font_size|size|position) = ", line):
+                print(" ", line.strip())
+        return 0
+
+    shutil.copy2(CONF, CONF + ".prev")
+    with open(CONF, "w", encoding="utf-8") as f:
+        f.write(result)
+    print(f"hyprlock.conf written at {factor}x (previous kept as hyprlock.conf.prev)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

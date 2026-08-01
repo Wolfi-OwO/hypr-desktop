@@ -86,9 +86,9 @@ label {
     monitor =
     text = cmd[update:60000] /home/woofi/.local/bin/hypr-greeting
     color = $subtext
-    font_size = 24
+    font_size = 17
     font_family = FiraCode Nerd Font
-    position = 0, 447
+    position = 0, 319
     halign = center
     valign = center
 }
@@ -98,14 +98,14 @@ label {
     monitor =
     text = cmd[update:1000] date +"%H:%M"
     color = $text
-    font_size = 134
+    font_size = 96
     font_family = FiraCode Nerd Font Light
-    position = 0, 319
+    position = 0, 228
     halign = center
     valign = center
 
     shadow_passes = 3
-    shadow_size = 8
+    shadow_size = 6
     shadow_color = $crust
     shadow_boost = 1.2
 }
@@ -115,14 +115,14 @@ label {
     monitor =
     text = cmd[update:60000] LC_TIME=de_DE.UTF-8 date +"%A, %d. %B %Y"
     color = $lavender
-    font_size = 24
+    font_size = 17
     font_family = FiraCode Nerd Font
-    position = 0, 237
+    position = 0, 169
     halign = center
     valign = center
 
     shadow_passes = 2
-    shadow_size = 6
+    shadow_size = 4
     shadow_color = $crust
 }
 
@@ -134,10 +134,10 @@ label {
 image {
     monitor =
     path = /home/woofi/.local/share/backgrounds/lock-stripe.png
-    size = 291
+    size = 208
     rounding = 0
     border_size = 0
-    position = 0, 203
+    position = 0, 145
     halign = center
     valign = center
 }
@@ -152,10 +152,10 @@ image {
 image {
     monitor =
     path = /home/woofi/.local/share/backgrounds/lock-card.png
-    size = 560
+    size = 400
     rounding = 0
     border_size = 0
-    position = 0, -85
+    position = 0, -61
     halign = center
     valign = center
 }
@@ -168,10 +168,10 @@ image {
 image {
     monitor =
     path = /home/woofi/.local/share/backgrounds/lock-ring.png
-    size = 246
+    size = 176
     rounding = 0
     border_size = 0
-    position = 0, -14
+    position = 0, -10
     halign = center
     valign = center
 }
@@ -179,11 +179,11 @@ image {
 image {
     monitor =
     path = /var/lib/AccountsService/icons/woofi
-    size = 168
+    size = 120
     rounding = -1              # -1 = vollstaendig rund
     border_size = 0            # the border comes from the ring underneath
     # Same centre point as the ring underneath.
-    position = 0, -28
+    position = 0, -20
     halign = center
     valign = center
 }
@@ -193,9 +193,9 @@ image {
 ####################
 input-field {
     monitor =
-    size = 420, 70
-    outline_thickness = 3
-    rounding = 35
+    size = 300, 50
+    outline_thickness = 2
+    rounding = 25
 
     dots_size = 0.26
     dots_spacing = 0.3
@@ -220,12 +220,12 @@ input-field {
     fade_on_empty = false
     swap_font_color = false
 
-    position = 0, -231
+    position = 0, -165
     halign = center
     valign = center
 
     shadow_passes = 2
-    shadow_size = 6
+    shadow_size = 4
     shadow_color = $crust
 }
 
@@ -237,9 +237,9 @@ label {
     monitor =
     text = $DESC
     color = $subtext
-    font_size = 21
+    font_size = 15
     font_family = FiraCode Nerd Font
-    position = 0, -165
+    position = 0, -118
     halign = center
     valign = center
 }
@@ -252,9 +252,9 @@ label {
     monitor =
     text = cmd[update:30000] printf "$(printf '\U000f0079')  %s%%%s" "$(cat /sys/class/power_supply/BAT0/capacity)" "$([ "$(cat /sys/class/power_supply/BAT0/status)" = Charging ] && printf "  $(printf '\U000f0084')")"
     color = $subtext
-    font_size = 20
+    font_size = 14
     font_family = FiraCode Nerd Font
-    position = 45, 39
+    position = 32, 28
     halign = left
     valign = bottom
 }
@@ -264,9 +264,9 @@ label {
     monitor =
     text = cmd[update:2000] hyprctl devices -j | jq -r '.keyboards[] | select(.main==true) | .active_keymap' 2>/dev/null || echo "German"
     color = $subtext
-    font_size = 20
+    font_size = 14
     font_family = FiraCode Nerd Font
-    position = -45, 39
+    position = -32, 28
     halign = right
     valign = bottom
 }
