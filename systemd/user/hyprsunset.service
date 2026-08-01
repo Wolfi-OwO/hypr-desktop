@@ -1,0 +1,13 @@
+[Unit]
+Description=Colour temperature schedule for Hyprland
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/hyprsunset
+Restart=on-failure
+RestartSec=2
+
+[Install]
+# NOT graphical-session.target, which never activates under Hyprland.
+WantedBy=default.target

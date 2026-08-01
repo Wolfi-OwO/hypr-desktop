@@ -40,7 +40,15 @@ local fileManager = "nautilus"
 -- Alt+F2 run dialog, which takes an arbitrary command rather than a .desktop
 -- entry -- the shell menu only lists installed applications.
 local runDialog   = "rofi -show run"
-local lock        = "hyprlock"
+-- Guarded, exactly as hypridle's lock_cmd is.
+--
+-- This was a bare "hyprlock". hypridle also locks -- on its own timer and
+-- before suspend -- so pressing SUPER+L while a lock was already up or coming
+-- up started a SECOND hyprlock against the same session. Two instances fight
+-- over the same surface, one dies, and Hyprland puts up its lockdead screen
+-- ("Oopsie daisy, it looks like you locked your screen but the lockscreen app
+-- died"). That is what happened on 2026-08-01.
+local lock        = "pidof hyprlock || hyprlock"
 local browser     = "brave"
 
 
@@ -543,6 +551,20 @@ hl.bind("XF86AudioRaiseVolume",  hl.dsp.exec_cmd("wpctl set-volume -l 1 @DEFAULT
 hl.bind("XF86AudioLowerVolume",  hl.dsp.exec_cmd("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- && qs ipc call bar refresh"),      { locked = true, repeating = true })
 hl.bind("XF86AudioMute",         hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle && qs ipc call bar refresh"),     { locked = true })
 hl.bind("XF86AudioMicMute",      hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle"),   { locked = true })
+-- Night light overrides. hyprsunset follows a schedule (hyprsunset.conf); these
+-- are for the times you want to overrule it -- editing photos in the evening,
+-- or wanting the warm filter early on a dark afternoon.
+--
+-- SUPER+SHIFT+N toggles: if a filter is active it resets to identity, otherwise
+-- it applies the evening temperature. `hyprctl hyprsunset` talks to the running
+-- daemon, so this does not fight the schedule -- the next profile boundary
+-- takes over again on its own.
+-- One toggle rather than two binds. SUPER+SHIFT+M was NOT free -- it already
+-- exits Hyprland (see above) -- and shadowing the quit key with a colour filter
+-- is exactly the kind of collision that gets discovered at the worst moment.
+hl.bind(mainMod .. " + SHIFT + N",
+    hl.dsp.exec_cmd([[bash -c 'hyprctl hyprsunset temperature | grep -q "^6500\\|identity" && hyprctl hyprsunset temperature 4000 || hyprctl hyprsunset identity']]))
+
 hl.bind("XF86MonBrightnessUp",   hl.dsp.exec_cmd("brightnessctl -e4 -n2 set 5%+ && qs ipc call bar refresh"),                  { locked = true, repeating = true })
 hl.bind("XF86MonBrightnessDown", hl.dsp.exec_cmd("brightnessctl -e4 -n2 set 5%- && qs ipc call bar refresh"),                  { locked = true, repeating = true })
 
