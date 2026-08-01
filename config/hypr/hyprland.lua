@@ -82,8 +82,13 @@ hl.on("hyprland.start", function()
     -- the surfaces really exist and restarts otherwise.
     hl.exec_cmd("/home/woofi/.local/bin/hypr-shell-guard")
 
-    -- Polkit agent. Without this, GUI password prompts fail silently.
-    hl.exec_cmd("/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1")
+    -- Polkit agent is a systemd user unit now (hyprpolkitagent.service), not
+    -- an autostart line. It replaces polkit-gnome, which cost 13.7 MB and
+    -- dragged GTK into the session for a single password dialog;
+    -- hyprpolkitagent is Qt/QML and matches the rest of the shell.
+    --
+    -- Without SOME agent running, GUI password prompts fail silently -- no
+    -- dialog, no error, the action just does not happen.
 
     -- Clipboard history (replaces the GNOME clipboard-indicator extension)
     hl.exec_cmd("wl-paste --type text  --watch cliphist store")

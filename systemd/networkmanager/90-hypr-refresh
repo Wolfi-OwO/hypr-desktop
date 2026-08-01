@@ -1,0 +1,40 @@
+#!/bin/sh
+# Kick the desktop's network-dependent fetches the moment a link comes up.
+#
+# NetworkManager runs every executable here as root with:
+#   $1 = interface   $2 = up|down|pre-up|vpn-up|connectivity-change|...
+#
+# WHY THIS EXISTS
+# ---------------
+# The weather and calendar fetches were driven purely by timers inside
+# hypr-eventd. At login that is a race: the daemon starts, finds no route yet,
+# gives up, and the widgets sit on cached values until the next tick comes
+# round. Reconnecting after suspend or after moving between networks had the
+# same shape -- the link was back but nothing asked for fresh data.
+#
+# This turns "the network arrived" into an event instead of something waited on.
+#
+# THIS MUST RETURN IMMEDIATELY. NetworkManager runs dispatcher scripts
+# synchronously and a slow one holds up its own state machine -- the same class
+# of mistake that made resume from suspend take 92 seconds through a
+# system-sleep hook. Hence setsid, a background &, and a timeout.
+
+[ "$2" = "up" ] || [ "$2" = "vpn-up" ] || exit 0
+
+# Ignore loopback: it comes up on every boot and means nothing here.
+[ "$1" = "lo" ] && exit 0
+
+USER_NAME=$(loginctl list-sessions --no-legend 2>/dev/null \
+            | awk '$3 != "" && $3 != "root" { print $3; exit }')
+[ -n "$USER_NAME" ] || exit 0
+USER_UID=$(id -u "$USER_NAME" 2>/dev/null) || exit 0
+
+# hypr-resume-refresh is the same unit the sleep hook uses: it re-fetches
+# weather and the calendar and republishes them on the bus. Reusing it keeps one
+# definition of "bring the desktop's data up to date" rather than two.
+setsid timeout 60 runuser -u "$USER_NAME" -- \
+    env "XDG_RUNTIME_DIR=/run/user/${USER_UID}" \
+    systemctl --user --no-block start hypr-resume-refresh.service \
+    >/dev/null 2>&1 &
+
+exit 0
