@@ -160,3 +160,35 @@ qs -c ~/.config/quickshell ipc show          # what the shell exposes
 ```
 
 Quickshell logs QML errors to stdout; run it in a terminal to see them.
+
+## Application icons show as a magenta checkerboard
+
+That pattern is Qt's placeholder for an icon that failed to LOAD, not one that
+is missing -- a genuinely absent icon renders blank. Two separate causes
+produced it here.
+
+**The active icon theme's `Inherits` chain is too short.** `WhiteSur-dark`
+shipped with `Inherits=hicolor,breeze`, and several common names
+(`preferences-system-network`, `network-wired`, `display`) simply do not exist
+in that short chain, though they exist in themes already installed
+(Papirus-Dark, Tela-circle). Extend the chain in
+`/usr/share/icons/<theme>/index.theme` -- back it up first, it is not owned by
+any package so an update will not restore it if broken:
+
+```sh
+sudo sed -i 's|^Inherits=.*|Inherits=Papirus-Dark,Tela-circle,breeze,Adwaita,hicolor|' \
+    /usr/share/icons/WhiteSur-dark/index.theme
+```
+
+**`QIconLoader` caches a lookup failure for the running process's lifetime.**
+Installing an icon file while Quickshell is already running does NOT fix a name
+it already failed to resolve once -- the negative result is cached, and a
+config reload (`hyprctl reload`, editing a `.qml` file) does not clear it. Only
+a full process restart does. If an icon still shows the checkerboard after
+adding the file, that is why -- restart the shell (see "Full shell restart" in
+this document) before concluding the fix did not work.
+
+The reliable placement for a one-off icon, regardless of what the packaged
+theme chain resolves: `~/.local/share/icons/hicolor/scalable/apps/<name>.svg`.
+`hicolor` is always the final, guaranteed fallback per the freedesktop icon
+spec, so this works even when the active theme is broken or absent.
