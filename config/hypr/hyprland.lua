@@ -573,8 +573,13 @@ hl.bind("ALT + Print",   hl.dsp.exec_cmd("/home/woofi/.local/bin/hypr-screenshot
 hl.bind("CTRL + Print",  hl.dsp.exec_cmd("/home/woofi/.local/bin/hypr-screenshot copy"))
 
 -- ---- Clipboard history (replaces clipboard-indicator) ------------------
-hl.bind(mainMod .. " + SHIFT + V",
-    hl.dsp.exec_cmd([[bash -c 'cliphist list | rofi -dmenu -p Clipboard | cliphist decode | wl-copy']]))
+-- Zwischenablage-Verlauf als Shell-Panel statt rofi.
+--
+-- Zuvor: `cliphist list | rofi -dmenu | cliphist decode | wl-copy`. rofi war
+-- hier aus denselben Gruenden falsch wie ueberall sonst -- unter Wayland
+-- bekommt es keine Klicks ausserhalb der eigenen Flaeche, taucht nicht in
+-- `hyprctl layers` auf und ignoriert hell/dunkel. cliphist bleibt als Backend.
+hl.bind(mainMod .. " + V", hl.dsp.exec_cmd("qs ipc call clipboard toggle"))
 
 -- ---- Media & brightness (hardware keys) -------------------------------
 hl.bind("XF86AudioRaiseVolume",  hl.dsp.exec_cmd("wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+ && qs ipc call bar refresh"), { locked = true, repeating = true })
