@@ -592,6 +592,11 @@ hl.bind("XF86AudioMicMute",      hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_
 -- One toggle rather than two binds. SUPER+SHIFT+M was NOT free -- it already
 -- exits Hyprland (see above) -- and shadowing the quit key with a colour filter
 -- is exactly the kind of collision that gets discovered at the worst moment.
+-- Zeitplan-Editor fuer die Farbtemperatur. SUPER+SHIFT+N schaltet sofort um,
+-- dies oeffnet den Plan pro Wochentag und Stunde.
+hl.bind(mainMod .. " + SHIFT + T",
+    hl.dsp.exec_cmd("qs ipc call sunset toggle"))
+
 hl.bind(mainMod .. " + SHIFT + N",
     hl.dsp.exec_cmd([[bash -c 'hyprctl hyprsunset temperature | grep -q "^6500\\|identity" && hyprctl hyprsunset temperature 4000 || hyprctl hyprsunset identity']]))
 
