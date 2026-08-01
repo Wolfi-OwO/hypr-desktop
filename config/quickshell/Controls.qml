@@ -472,7 +472,23 @@ Scope {
                             MouseArea {
                                 anchors.fill: parent
                                 onClicked: {
-                                    ctl.run("bluetoothctl power " + (ctl.btPowered ? "off" : "on"));
+                                    // rfkill FIRST, then bluetoothctl.
+                                    //
+                                    // `bluetoothctl power on` cannot lift an
+                                    // rfkill soft block -- it reports success or
+                                    // silently does nothing while the adapter
+                                    // stays down, which is exactly how Bluetooth
+                                    // became impossible to switch on: hci0 sat
+                                    // soft-blocked and the toggle had no way to
+                                    // clear it. Suspend/resume and the firmware
+                                    // hotkey can both set that block.
+                                    //
+                                    // Blocking on the way off too, so the switch
+                                    // is symmetric and the adapter does not come
+                                    // back by itself after a resume.
+                                    ctl.run(ctl.btPowered
+                                        ? "bluetoothctl power off; rfkill block bluetooth"
+                                        : "rfkill unblock bluetooth; sleep 0.3; bluetoothctl power on");
                                     ctl.btPowered = !ctl.btPowered;
                                 }
                             }

@@ -336,9 +336,19 @@ Scope {
             // Centred under the trigger, then clamped so it never runs off
             // either edge. Without the clamp the Wi-Fi card -- which sits far
             // right in the bar -- would hang past the screen.
+            // Centred on the TARGET width, never on `width`.
+            //
+            // `width` carries a Behavior, so it is animated: on the first open
+            // after switching menus it still holds the PREVIOUS menu's value for
+            // the first frames. Computing x from it therefore placed the card
+            // using the old width and let it slide across afterwards -- which is
+            // exactly the "spawns in the wrong place the first time" report.
+            // Removing the duplicate Behavior on x was necessary but not
+            // sufficient; this is the other half.
             x: menus.anchorX < 0
                ? 6
-               : Math.max(6, Math.min(parent.width - width - 6, menus.anchorX - width / 2))
+               : Math.max(6, Math.min(parent.width - card.targetWidth - 6,
+                                      menus.anchorX - card.targetWidth / 2))
             Behavior on y { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
 
             // Switching between applications and Wi-Fi moves the card to the
@@ -363,7 +373,9 @@ Scope {
             Behavior on x     { enabled: menuWin.open; NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
             Behavior on width { enabled: menuWin.open; NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
 
-            width: menus.active === "apps" ? 460 : 340
+            // The width the card is heading for, independent of the animation.
+            readonly property int targetWidth: menus.active === "apps" ? 460 : 340
+            width: card.targetWidth
             height: Math.min(parent.height - menus.barHeight - 40, body.implicitHeight + 26)
             radius: 20
             color: Qt.rgba(Theme.mantle.r, Theme.mantle.g, Theme.mantle.b, 0.98)
