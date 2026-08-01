@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Start hyprlock, exactly once, no matter how many things ask at the same time.
+#
+# WHY THIS EXISTS
+# ---------------
+# Two independent paths can ask for a lock: the SUPER+L keybind, and hypridle
+# (on idle timeout, and via before_sleep_cmd before suspend). Both used the
+# idiom `pidof hyprlock || hyprlock`.
+#
+# That guard is not atomic. pidof-then-launch is two operations: two callers a
+# few milliseconds apart both run pidof, both see no process, and both launch.
+# Two hyprlock instances on one session end with one of them dying, and a dead
+# lockscreen is what puts Hyprland's lockdead screen on the display -- the
+# "Oopsie daisy" image with the handwritten logo.
+#
+# flock makes it atomic. The lock is held by THIS script for as long as hyprlock
+# runs, so a second caller fails to acquire it and exits quietly instead of
+# starting a competing instance. -n means it never waits.
+#
+# The lock file lives in the runtime directory, so it disappears with the
+# session rather than persisting as a stale file across reboots.
+
+set -uo pipefail
+
+LOCKFILE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr-lock.flock"
+
+exec 9>"$LOCKFILE" || exec hyprlock   # if the lock file cannot be made, still lock
+
+if ! flock -n 9; then
+    # Somebody else is already locking. That is a success, not an error: the
+    # screen ends up locked either way, which is all the caller wanted.
+    exit 0
+fi
+
+# fd 9 stays open for the lifetime of hyprlock, so the lock is held until it
+# exits. exec replaces this shell, keeping the descriptor.
+exec hyprlock "$@"

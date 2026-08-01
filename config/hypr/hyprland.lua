@@ -48,7 +48,23 @@ local runDialog   = "rofi -show run"
 -- over the same surface, one dies, and Hyprland puts up its lockdead screen
 -- ("Oopsie daisy, it looks like you locked your screen but the lockscreen app
 -- died"). That is what happened on 2026-08-01.
-local lock        = "pidof hyprlock || hyprlock"
+-- Locking goes through hypr-lock, which is atomic.
+--
+-- Two paths can ask for a lock: this bind, and hypridle (idle timeout, and
+-- before_sleep_cmd). Both used `pidof hyprlock || hyprlock`, which is NOT
+-- atomic -- pidof-then-launch is two steps, so two callers milliseconds apart
+-- both see no process and both launch. Two hyprlock instances on one session
+-- end with one dying, and a dead lockscreen is what shows Hyprland's lockdead
+-- screen.
+--
+-- hypr-lock holds an flock for hyprlock's whole lifetime, so a second caller
+-- exits quietly instead of competing. See ~/.local/bin/hypr-lock.
+--
+-- `loginctl lock-session` was tried instead and does NOT work here: hypridle
+-- distinguishes lock_cmd (which it runs on idle) from on_lock_cmd (which it
+-- runs when logind signals a lock), and only the former was configured -- so
+-- the keybind silently locked nothing at all.
+local lock        = "/home/woofi/.local/bin/hypr-lock"
 local browser     = "brave"
 
 
