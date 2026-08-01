@@ -532,11 +532,20 @@ Scope {
                                        : Qt.rgba(nc.cBase.r, nc.cBase.g, nc.cBase.b, 0.9)
                                 border.width: 1
                                 border.color: rowHov.hovered ? nc.cMauve : nc.cSurface0
-                                x: rowHov.hovered ? 2 : 0
+                                // NO x shift on hover.
+                                //
+                                // This used to move the card 2 px right, which
+                                // pushed it past the column's right edge: the
+                                // card fills the width, so any rightward shift
+                                // clips the border and the lit surface against
+                                // the edge instead of showing them. The colour
+                                // and border change carry the hover on their
+                                // own -- motion was never needed to say "this
+                                // one".
 
                                 Behavior on color       { ColorAnimation  { duration: 120; easing.type: Easing.OutCubic } }
                                 Behavior on border.color{ ColorAnimation  { duration: 120; easing.type: Easing.OutCubic } }
-                                Behavior on x           { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+
 
                                 HoverHandler {
                                     id: rowHov
