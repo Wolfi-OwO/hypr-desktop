@@ -53,6 +53,28 @@ while true; do
     # With no compositor running there is nothing to check.
     hyprctl version >/dev/null 2>&1 || continue
 
+    # Do not judge the shell during a monitor change.
+    #
+    # Plugging or unplugging a display makes Quickshell tear its per-output
+    # surfaces down and build them back up. For a moment `hyprctl layers` is
+    # missing namespaces that are about to return on their own -- which looks
+    # exactly like the failure this watchdog exists to catch, and restarting
+    # into that would replace a shell that was recovering with one that has to
+    # start from nothing.
+    #
+    # The output count is compared against the previous pass; if it changed,
+    # this round is skipped entirely and the next one judges the settled state.
+    # Counted by parsing, NOT by grepping '"id"' -- that key also appears in
+    # each monitor's nested workspace object, so a grep reported 3 outputs on a
+    # single-monitor machine and the comparison below would have been noise.
+    outputs=$(hyprctl monitors -j 2>/dev/null \
+              | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null)
+    if [ "${outputs:-0}" != "${last_outputs:-$outputs}" ]; then
+        last_outputs="$outputs"
+        continue
+    fi
+    last_outputs="$outputs"
+
     surfaces_present && continue
 
     # Confirm the fault a second time before acting on it.

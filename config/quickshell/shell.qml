@@ -187,6 +187,33 @@ ShellRoot {
             required property var modelData
             screen: root.modelData
 
+            // Widgets on ONE screen only, not duplicated across every output.
+            //
+            // The bar and the wallpaper belong on each monitor; the clock,
+            // weather, stats and photo stack do not -- two clocks showing the
+            // same time on two screens is clutter, not a feature. This is the
+            // difference between "per monitor" and "one instance", and Variants
+            // gives you the former unless you say otherwise.
+            //
+            // Preferred output is the built-in panel (eDP-*). Falling back to
+            // the first screen covers the docked case where the lid is shut and
+            // there is no eDP at all -- without the fallback the widgets would
+            // vanish entirely on a dock, which is worse than being on the wrong
+            // screen.
+            //
+            // NOT VERIFIED against real hardware: this machine has one output,
+            // so the multi-monitor path has never actually run. The single
+            // monitor case is unchanged and confirmed working.
+            readonly property bool preferred: {
+                const all = Quickshell.screens;
+                if (!all || all.length <= 1) return true;
+                for (let i = 0; i < all.length; i++)
+                    if (all[i].name.indexOf("eDP") === 0)
+                        return root.modelData.name === all[i].name;
+                return root.modelData.name === all[0].name;
+            }
+            visible: root.preferred
+
             // Bottom, NOT Background: hyprpaper also sits on Background, and
             // within one layer the stacking follows creation order. As soon as
             // the wallpaper was changed, hyprpaper created a new surface --
