@@ -20,7 +20,33 @@ Scope {
     id: nc
 
     property bool panelOpen: false
-    property bool dnd: false
+    // Seeded from disk, not hardcoded to false.
+    //
+    // Do-not-disturb used to reset on every shell restart -- and the shell
+    // restarts on any config change and whenever the watchdog fires. Switching
+    // it on and finding it silently off again an hour later makes the setting
+    // untrustworthy, which is worse than not having it.
+    //
+    // blockLoading, so the value is present before the first notification can
+    // arrive rather than being applied a moment later.
+    property bool dnd: {
+        try {
+            const t = dndCache.text();
+            if (t.length > 0) return JSON.parse(t).dnd === true;
+        } catch (e) { /* first run, or a half-written file */ }
+        return false;
+    }
+
+    // Persist on every change. ONE handler: QML permits a single onDndChanged
+    // per object, and a second silently costs the whole file.
+    onDndChanged: dndCache.setText(JSON.stringify({ dnd: nc.dnd }))
+
+    FileView {
+        id: dndCache
+        path: "/home/woofi/.cache/hypr/dnd.json"
+        blockLoading: true
+        printErrors: false
+    }
 
     // Calendar navigation.
     //
