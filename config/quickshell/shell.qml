@@ -123,20 +123,18 @@ ShellRoot {
                     source: "file:///home/woofi/.local/share/backgrounds/flag-mesh-light-2880x1800.png"
                     fillMode: Image.PreserveAspectCrop
                     cache: true
-                    // Decode at SCREEN size, not at the file's 2880x1800.
+                    // NO sourceSize. The file is 2880x1800 and so is the
+                    // panel -- these images are already exactly right.
                     //
-                    // Without this, Qt decodes the full image and keeps it as
-                    // uncompressed RGBA: 2880 x 1800 x 4 = 20.7 MB. Both
-                    // variants are held at once so they can cross-fade, so the
-                    // pair cost 41.5 MB of the shell's baseline -- to draw on a
-                    // 1440x900 panel that can show a quarter of those pixels.
-                    //
-                    // The file and the screen share the same 1.6 aspect ratio,
-                    // so this loses nothing at all: it is the downscale the GPU
-                    // was doing on every frame anyway, done once at decode
-                    // time. 5.2 MB each instead of 20.7 MB.
-                    sourceSize.width: bg.width
-                    sourceSize.height: bg.height
+                    // This briefly read `sourceSize: bg.width/bg.height` to cut
+                    // 41.5 MB, on the belief that the screen was 1440x900. It
+                    // is not. `hyprctl layers` reports LOGICAL coordinates, and
+                    // this display is 2880x1800 at scale 2.0, so 1440x900 is
+                    // the logical size while the physical panel has four times
+                    // the pixels. bg.width is logical too, so that change
+                    // decoded the wallpaper at half resolution and let the GPU
+                    // upscale it 2x -- visibly soft, for a saving that was
+                    // never real waste in the first place.
                     // Only the ACTIVE variant's image is loaded synchronously.
                     // This used to say `false` twice, so two 2880x1800 images
                     // were decoded and pushed to the GPU at startup before
@@ -156,9 +154,8 @@ ShellRoot {
                     source: "file:///home/woofi/.local/share/backgrounds/flag-mesh-2880x1800.png"
                     fillMode: Image.PreserveAspectCrop
                     cache: true
-                    // See lightWall: decode at screen size, not 2880x1800.
-                    sourceSize.width: bg.width
-                    sourceSize.height: bg.height
+                    // See lightWall: no sourceSize -- the file already
+                    // matches the physical 2880x1800 panel.
                     asynchronous: !Theme.dark
                     opacity: Theme.dark ? 1 : 0
                     Behavior on opacity {
