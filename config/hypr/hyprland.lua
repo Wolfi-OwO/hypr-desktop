@@ -210,6 +210,20 @@ hl.config({
         force_default_wallpaper = 0,
         disable_hyprland_logo   = true,
 
+        -- The random splash line, off.
+        --
+        -- Hyprland draws one of a pool of short strings over its own default
+        -- wallpaper -- contributor thank-yous, among them "Thanks raf!",
+        -- "Thanks Brodie!" and "Thanks fufexan!". It is charming and it is
+        -- also not this desktop's text, and it flashed up for a moment
+        -- whenever Quickshell's wallpaper layer was not yet drawn: at login,
+        -- and for a frame whenever the shell restarted.
+        --
+        -- disable_hyprland_logo and force_default_wallpaper above suppress the
+        -- IMAGE but not the splash string, which is a separate setting -- which
+        -- is why the text kept appearing over an otherwise blank background.
+        disable_splash_rendering = true,
+
         -- Base colour of the empty surface.
         --
         -- Without this it is BLACK, and because the wallpaper only appears with
