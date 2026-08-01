@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Print this display's real geometry, and which coordinate space each tool uses.
+
+WHY THIS EXISTS
+---------------
+This panel is 2880x1800 running at scale 2, so there are TWO valid answers to
+"how big is the screen": 2880x1800 physical pixels, and 1440x900 logical points.
+Different parts of the desktop report and consume different ones, with nothing
+labelling which is which:
+
+    hyprctl monitors    physical, plus the scale factor       (the truth)
+    hyprctl layers      LOGICAL   -- looks like a resolution, is not
+    hyprctl clients     LOGICAL
+    Quickshell          LOGICAL   (PanelWindow width/height)
+    grim captures       PHYSICAL
+    hyprlock            PHYSICAL  -- font_size 96 is 96 real pixels
+    SDDM greeter        a 1440x900 stage scaled by su, on a physical root
+
+Reading `hyprctl layers` and taking 1440x900 for the pixel count caused two real
+bugs: wallpapers decoded at half resolution and upscaled by the GPU, and a lock
+screen half the size of the greeter. Both looked like taste problems and were
+arithmetic.
+
+Run this before sizing anything against the screen.
+"""
+
+import json
+import subprocess
+import sys
+
+
+def main():
+    try:
+        out = subprocess.run(["hyprctl", "monitors", "-j"],
+                             capture_output=True, text=True, timeout=5).stdout
+        mons = json.loads(out)
+    except Exception as e:
+        print(f"cannot query hyprctl: {e}")
+        return 1
+    if not mons:
+        print("no monitors reported")
+        return 1
+
+    for m in mons:
+        pw, ph, sc = m["width"], m["height"], m["scale"]
+        lw, lh = round(pw / sc), round(ph / sc)
+        print(f"\n  {m['name']}  {m.get('description','')}".rstrip())
+        print(f"    physical   {pw} x {ph}   <- real pixels; grim, hyprlock, image files")
+        print(f"    logical    {lw} x {lh}   <- hyprctl layers/clients, Quickshell")
+        print(f"    scale      {sc}")
+        print(f"    refresh    {m['refreshRate']:.0f} Hz")
+
+        print("\n    sizing a value against this screen:")
+        print(f"      a Quickshell width of {lw} covers the screen")
+        print(f"      an image needs {pw}x{ph} to be pixel-exact")
+        print(f"      an hyprlock font_size of N renders as N physical pixels")
+        # PHYSICAL, not logical: SDDM's X server runs at the panel's native
+        # resolution with no scaling (confirmed in Xorg.0.log), so its theme
+        # root is 2880x1800 and su computes from that. Using the logical size
+        # here gave 0.85 instead of 1.7 -- exactly the mistake this tool exists
+        # to prevent, made inside the tool itself.
+        su = min(pw / 1440, ph / 900) * 0.85
+        print(f"      the SDDM theme's su factor here is {su:.2f}"
+              f"  (clock 96 -> {round(96*su)} px; hyprlock needs the same)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
