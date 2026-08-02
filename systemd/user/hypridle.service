@@ -6,7 +6,13 @@ PartOf=graphical-session.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/hypridle
-Restart=on-failure
+# on-failure is not enough: hypridle can lose its Wayland connection after a
+# resume and exit 0 ("[CRITICAL] Disconnected from pollfd id 1", then a clean
+# stop) -- a lid close a minute later then has no idle daemon left to react to
+# it at all, silently, until the next login. Measured on 2026-08-01: exactly
+# this happened at 22:59:52, and the laptop suspended unlocked at 23:01:49
+# with nothing running to lock it. `always` covers a clean exit too.
+Restart=always
 RestartSec=2
 
 [Install]
