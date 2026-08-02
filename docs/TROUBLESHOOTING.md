@@ -236,3 +236,40 @@ Known trade-off: disabling DC5/DC6 gives up some of the panel's deepest idle
 power state, which costs a small amount of battery during long suspends. Kept
 anyway -- an unusable black screen after a suspend that should just work costs
 more than the battery does.
+
+**Second contributing factor, found on a repeat of this same problem:**
+`journalctl -k` around actual resume events (not just this one, a second one
+caught live in a later session) shows
+
+```
+ACPI BIOS Error (bug): Could not resolve symbol [\_SB.PC00.LPCB.EC0._Q44.WM00], AE_NOT_FOUND
+ACPI Error: Aborting method \_SB.PC00.LPCB.EC0._Q44 due to previous error (AE_NOT_FOUND)
+```
+
+Do not confuse this with `_Q70.SEN5`, which throws the identical class of
+error but fires on a constant ~2 s cycle around the clock, resume or not --
+that one is unrelated background EC sensor-poll noise from the same buggy
+table and has nothing to do with this. `_Q44.WM00` is different: across two
+separate boots it appeared ONLY within seconds of an actual resume/wake event,
+never during idle runtime. It correlates with a hypridle crash
+("Disconnected from pollfd", see the systemd Restart=always fix elsewhere in
+this document) in one case and with the black screen in the other.
+
+This is Lenovo's own DSDT referencing an EC query method (`WM00`, plausibly
+"wake monitor") that does not exist in the loaded ACPI table -- a firmware
+bug, not something Linux, i915 or Hyprland can retry around. If the EC's own
+attempt to signal the panel to wake fails silently here, that would explain a
+black screen that looks completely clean from the OS side (kernel resume,
+hypridle's DPMS-on, hypr-resume-refresh -- everything already checked out
+above).
+
+Machine: Lenovo Yoga 7 14IAL7 (type 82QE), BIOS J1CN45WW (2024-06-24) -- read
+with `sudo dmidecode -s bios-version`. Lenovo's download page for this model
+is at support.lenovo.com (search "Yoga 7 14IAL7 BIOS update"); it blocks
+automated fetches, so check by hand whether a BIOS newer than J1CN45WW is
+listed and whether its release notes mention sleep/resume/EC fixes -- a
+firmware update is the correct fix for a DSDT bug, safer than hand-patching
+the ACPI tables. An SSDT override that stubs out the missing `WM00` method is
+possible but was deliberately not attempted here: it touches EC
+communication, which battery, thermal and keyboard backlight all also depend
+on, and a mistake there is a much worse afternoon than this one.
