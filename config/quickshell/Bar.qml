@@ -315,7 +315,15 @@ Scope {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: Hyprland.dispatch("workspace " + parent.wsId)
+                                    // NOT "workspace " + wsId: this machine runs the
+                                    // Hyprland Lua config plugin, which evaluates every
+                                    // dispatch argument as Lua, on the raw socket the
+                                    // Quickshell.Hyprland module writes to as well --
+                                    // verified with the plain form over that same socket,
+                                    // and it fails with the identical Lua syntax error
+                                    // `hyprctl dispatch` gives from a shell.
+                                    onClicked: Hyprland.dispatch(
+                                        "hl.dsp.focus({ workspace = " + parent.wsId + " })")
                                 }
                             }
                         }

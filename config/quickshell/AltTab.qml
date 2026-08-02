@@ -325,27 +325,51 @@ Scope {
                             border.color: index === at.index ? Theme.lavender : Theme.surface0
                             Behavior on color { ColorAnimation { duration: 90 } }
 
-                            Column {
-                                anchors.centerIn: parent
-                                spacing: 4
+                            // Live thumbnail of the group's first/active
+                            // window, underneath everything else. `active` is
+                            // tied to the overlay being shown at all, not to
+                            // being the selected tile -- Alt+Tab is a rapid
+                            // keyboard cycle (see the header comment: no
+                            // animation on the cycle itself), and re-starting
+                            // a capture stream on every step would show a
+                            // blank tile for a frame each time instead of
+                            // already having the picture.
+                            WindowThumb {
+                                anchors.fill: parent
+                                anchors.margins: parent.border.width
+                                radius: 16
+                                cls: modelData.key
+                                winTitle: modelData.windows.length > 0
+                                          ? modelData.windows[0].title : ""
+                                active: at.shown
+                                fallbackIcon: at.iconFor(modelData.key)
+                                fallbackColour: index === at.index ? Theme.crust : Theme.text
+                            }
 
-                                Text {
-                                    anchors.horizontalCenter: parent.horizontalCenter
-                                    // .key, not .name: since the change .name is
-                                    // the display name ("Brave"), whereas
-                                    // iconFor expects the normalised class name
-                                    // ("brave").
-                                    text: Theme.ico(at.iconFor(modelData.key))
-                                    color: index === at.index ? Theme.crust : Theme.text
-                                    font.family: Theme.uiFont
-                                    font.pixelSize: 34
+                            // Name scrim at the bottom, over the thumbnail.
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.bottom: parent.bottom
+                                anchors.margins: parent.border.width
+                                height: 22
+                                radius: 16
+                                color: index === at.index
+                                       ? Qt.rgba(Theme.mauve.r, Theme.mauve.g, Theme.mauve.b, 0.9)
+                                       : Qt.rgba(0, 0, 0, 0.55)
+                                Rectangle {
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.top: parent.top
+                                    height: parent.radius
+                                    color: parent.color
                                 }
                                 Text {
-                                    anchors.horizontalCenter: parent.horizontalCenter
-                                    width: 84
+                                    anchors.centerIn: parent
+                                    width: parent.width - 10
                                     horizontalAlignment: Text.AlignHCenter
                                     text: modelData.name
-                                    color: index === at.index ? Theme.crust : Theme.subtext
+                                    color: index === at.index ? Theme.crust : "white"
                                     font.family: Theme.uiFont
                                     font.pixelSize: 10
                                     elide: Text.ElideRight
@@ -354,14 +378,16 @@ Scope {
 
                             // Arrow when more than one window is behind it
                             Text {
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                anchors.bottom: parent.bottom
-                                anchors.bottomMargin: 2
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: 5
                                 visible: modelData.windows.length > 1
                                 text: Theme.ico(0xf0140) + " " + modelData.windows.length
-                                color: index === at.index ? Theme.crust : Theme.subtext
+                                color: index === at.index ? Theme.crust : "white"
                                 font.family: Theme.uiFont
                                 font.pixelSize: 10
+                                style: Text.Outline
+                                styleColor: Qt.rgba(0, 0, 0, 0.5)
                             }
 
                             // With the mouse: hovering selects, clicking
@@ -415,7 +441,7 @@ Scope {
             spacing: 10
             visible: at.subIndex !== -1 && at.groups.length > 0
 
-            readonly property int cell: 200 + spacing
+            readonly property int cell: 160 + spacing
             readonly property int count: (at.subIndex !== -1 && at.groups[at.index])
                                          ? at.groups[at.index].windows.length : 0
             columns: Math.max(1, Math.min(count,
@@ -435,8 +461,7 @@ Scope {
                     required property int index
                     readonly property bool picked: index === at.subIndex
 
-                    width: Math.min(200, tt.implicitWidth + 26)
-                    height: 34
+                    width: 160; height: 100
 
                     // Drop shadow. Not DropShadow from Qt5Compat: that would be
                     // an extra dependency for an effect a slightly offset, soft
@@ -450,25 +475,54 @@ Scope {
                     }
 
                     Rectangle {
+                        id: tile
                         anchors.fill: parent
                         radius: 12
-                        color: parent.picked
-                               ? Theme.lavender
-                               : Qt.rgba(Theme.mantle.r, Theme.mantle.g,
-                                         Theme.mantle.b, 0.96)
+                        color: Theme.crust
                         border.width: parent.picked ? 2 : 1
                         border.color: parent.picked ? Theme.mauve : Theme.surface1
+                        Behavior on border.color { ColorAnimation { duration: 90 } }
 
-                        Text {
-                            id: tt
-                            anchors.centerIn: parent
-                            width: 176
-                            horizontalAlignment: Text.AlignHCenter
-                            text: modelData.title
-                            color: parent.parent.picked ? Theme.crust : Theme.text
-                            font.family: Theme.uiFont
-                            font.pixelSize: 11
-                            elide: Text.ElideRight
+                        WindowThumb {
+                            anchors.fill: parent
+                            anchors.margins: tile.border.width
+                            radius: 10
+                            // Same app for every tile in this row, so the
+                            // group's own key is the class; only the title
+                            // distinguishes one window from the next.
+                            cls: at.groups[at.index] ? at.groups[at.index].key : ""
+                            winTitle: modelData.title
+                            active: at.shown && at.subIndex !== -1
+                            fallbackIcon: at.iconFor(cls)
+                        }
+
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            anchors.margins: tile.border.width
+                            height: 20
+                            radius: 10
+                            color: parent.picked
+                                   ? Qt.rgba(Theme.mauve.r, Theme.mauve.g, Theme.mauve.b, 0.9)
+                                   : Qt.rgba(0, 0, 0, 0.55)
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                height: parent.radius
+                                color: parent.color
+                            }
+                            Text {
+                                anchors.centerIn: parent
+                                width: parent.width - 10
+                                horizontalAlignment: Text.AlignHCenter
+                                text: modelData.title
+                                color: "white"
+                                font.family: Theme.uiFont
+                                font.pixelSize: 10
+                                elide: Text.ElideRight
+                            }
                         }
                     }
 

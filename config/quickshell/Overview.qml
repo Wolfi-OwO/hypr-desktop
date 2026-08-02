@@ -3,10 +3,12 @@
 //  Shows every workspace as a card with the windows on it, which one is
 //  focused, and lets you jump to a workspace or straight to a window.
 //
-//  NO live thumbnails. Those need wlr-screencopy per window per frame, and
-//  getting that wrong costs GPU time continuously rather than once. Titles and
-//  application names identify a window well enough to switch to it, which is
-//  what a switcher is for. Thumbnails can come later without changing this.
+//  Live thumbnails via WindowThumb.qml (Quickshell.Wayland's ScreencopyView +
+//  ToplevelManager -- a real, statically-typed module, unlike the empty
+//  runtime-registered Quickshell.Hyprland one). Only decode while this panel
+//  is actually open (`active: ov.panelOpen`), so a closed overview costs
+//  nothing -- the GPU concern that ruled thumbnails out originally is what
+//  that gate exists to answer.
 //
 //  Data comes from hypr-overview (hyprctl JSON), not from the Quickshell
 //  Hyprland module: that module registers its types at runtime, so its API
@@ -57,13 +59,20 @@ Scope {
         }
     }
 
+    // NOT the plain "workspace"/"focuswindow" dispatcher strings: this machine
+    // runs the Hyprland Lua config plugin, which evaluates every dispatch
+    // argument as Lua. "hyprctl dispatch workspace 2" fails with
+    //     [string "return hl.dispatch(workspace 2)"]:1: ')' expected near '2'
+    // The object form below is what every keybind in hyprland.lua already
+    // uses, and is what actually works on this Hyprland.
     function goWorkspace(id) {
-        Quickshell.execDetached(["hyprctl", "dispatch", "workspace", String(id)]);
+        Quickshell.execDetached(["hyprctl", "dispatch",
+            "hl.dsp.focus({ workspace = " + String(id) + " })"]);
         ov.close();
     }
     function goWindow(addr) {
-        Quickshell.execDetached(["hyprctl", "dispatch", "focuswindow",
-                                 "address:" + addr]);
+        Quickshell.execDetached(["hyprctl", "dispatch",
+            "hl.dsp.focus({ window = \"address:" + addr + "\" })"]);
         ov.close();
     }
     function move(d) {
@@ -163,8 +172,8 @@ Scope {
                         readonly property bool isActive: modelData.id === ov.activeWs
                         readonly property bool isSelected: index === ov.selIndex
 
-                        width: 230
-                        height: 150
+                        width: 260
+                        height: 196
                         radius: 14
                         color: isActive
                                ? Qt.rgba(Theme.mauve.r, Theme.mauve.g, Theme.mauve.b, 0.16)
@@ -200,55 +209,85 @@ Scope {
                             font.pixelSize: 11
                         }
 
-                        Column {
+                        Grid {
                             anchors.top: wsNum.bottom
                             anchors.topMargin: 6
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.margins: 10
-                            spacing: 3
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            columns: 2
+                            spacing: 6
 
                             Repeater {
-                                // Four fit; beyond that the card would grow and
-                                // the grid would jump between workspaces.
+                                // Four fit as a 2x2 grid; beyond that the card
+                                // would grow and the grid would jump between
+                                // workspaces.
                                 model: modelData.windows.slice(0, 4)
                                 delegate: Rectangle {
                                     required property var modelData
-                                    width: parent.width
-                                    height: 22
-                                    radius: 7
-                                    color: modelData.focused
-                                           ? Qt.rgba(Theme.mauve.r, Theme.mauve.g, Theme.mauve.b, 0.22)
-                                           : (winHov.hovered ? Theme.surface1 : "transparent")
-                                    Behavior on color { ColorAnimation { duration: 90 } }
-                                    HoverHandler { id: winHov; cursorShape: Qt.PointingHandCursor }
+                                    width: 113
+                                    height: 76
+                                    radius: 9
+                                    color: Theme.crust
+                                    border.width: modelData.focused ? 2 : 1
+                                    border.color: modelData.focused ? Theme.mauve : Theme.surface0
+                                    Behavior on border.color { ColorAnimation { duration: 90 } }
 
-                                    Text {
+                                    WindowThumb {
+                                        anchors.fill: parent
+                                        anchors.margins: parent.border.width
+                                        radius: 7
+                                        cls: modelData.class
+                                        winTitle: modelData.title
+                                        // Only THIS workspace's thumbnails
+                                        // actually decode frames, and only
+                                        // while the panel is open -- an
+                                        // off-screen workspace's windows cost
+                                        // nothing to show here either.
+                                        active: ov.panelOpen
+                                        fallbackColour: modelData.focused ? Theme.mauve : Theme.subtext
+                                    }
+
+                                    // Title scrim, Windows-Task-View style:
+                                    // overlaid on the thumbnail rather than a
+                                    // separate row, so four windows still fit
+                                    // in the same card.
+                                    Rectangle {
                                         anchors.left: parent.left
                                         anchors.right: parent.right
-                                        anchors.leftMargin: 7
-                                        anchors.rightMargin: 7
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        text: modelData.title !== ""
-                                              ? modelData.title : modelData.class
-                                        color: modelData.focused ? Theme.text : Theme.subtext
-                                        font.family: Theme.uiFont
-                                        font.pixelSize: 10
-                                        elide: Text.ElideRight
+                                        anchors.bottom: parent.bottom
+                                        height: 18
+                                        radius: 7
+                                        color: Qt.rgba(0, 0, 0, 0.55)
+                                        // Square off the top corners of the
+                                        // scrim so only the bottom stays
+                                        // rounded with the tile.
+                                        Rectangle {
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.top: parent.top
+                                            height: parent.radius
+                                            color: parent.color
+                                        }
+                                        Text {
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            anchors.leftMargin: 6
+                                            anchors.rightMargin: 6
+                                            text: modelData.title !== ""
+                                                  ? modelData.title : modelData.class
+                                            color: "white"
+                                            font.family: Theme.uiFont
+                                            font.pixelSize: 9
+                                            elide: Text.ElideRight
+                                        }
                                     }
+
+                                    HoverHandler { id: winHov; cursorShape: Qt.PointingHandCursor }
                                     MouseArea {
                                         anchors.fill: parent
                                         onClicked: ov.goWindow(modelData.address)
                                     }
                                 }
-                            }
-                            Text {
-                                visible: modelData.windows.length > 4
-                                text: "+ " + (modelData.windows.length - 4) + " weitere"
-                                color: Theme.surface2
-                                font.family: Theme.uiFont
-                                font.pixelSize: 10
-                                leftPadding: 7
                             }
                         }
 
