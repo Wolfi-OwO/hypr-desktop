@@ -752,12 +752,22 @@ def main():
     ssid, iface = "", ""
     last_ping = time.monotonic()
 
+    # Values with no event source of their own. Filled in on the first full
+    # sample below (due starts True) and held between ticks otherwise.
+    cpu, mem, temp = 0, "0", 0
+    batt, batt_state = 0, "Unknown"
+    bright, down, bt, net = 0, "0 B/s", "off", "off"
+
     def send(topic, obj):
         payload = json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
         if last.get(topic) == payload:
             return
         if mqtt.publish(topic, payload):
             last[topic] = payload
+
+    # True when the tick-bound sensors are due for a fresh read: the first
+    # pass, or after `flags.woke.wait` timed out rather than being woken early.
+    due = True
 
     while True:
         started = time.monotonic()
@@ -784,37 +794,57 @@ def main():
             flags.network = False
             iface = default_iface()
             ssid = read_ssid(iface)
-        else:
+
+        # CPU, RAM, temperature, battery, brightness, download rate, bluetooth
+        # and network kind have no event source, so they only need resampling
+        # once a real TICK has elapsed -- not on every wakeup.
+        #
+        # Sampling them on EVERY wakeup, including an early one triggered by a
+        # volume or brightness event, used to feed down_rate() a `dt` of a few
+        # milliseconds instead of the full ~1.1 s tick. down_rate() divides by
+        # dt, so a tiny dt produced a noise spike in the smoothed rate, and
+        # because every field lands in the one combined hypr/state object,
+        # that spike -- plus a freshly re-read CPU/RAM/temperature -- went out
+        # bundled with the volume change. Result: turning the volume up made
+        # the download rate, RAM and CPU pills all flicker in step with it,
+        # even though none of them had actually changed. Gating this block on
+        # `due` decouples them again: an early wake only republishes the field
+        # the event was actually about.
+        if due:
             # The default route can change without ip monitor saying anything
             # useful (a VPN going up, for instance), and this read is a single
-            # file, so it is checked every tick regardless.
+            # file, so it is checked every full tick regardless.
             new_iface = default_iface()
             if new_iface != iface:
                 iface = new_iface
                 ssid = read_ssid(iface)
 
-        cpu = cpu_percent()
-        mem = mem_used_gb()
-        temp = temperature()
-        batt, batt_state = battery()
-        bright = brightness()
-        down = down_rate(iface)
-        bt = bluetooth_on()
-        net = "off" if not iface else ("wifi" if iface.startswith("wl") else "eth")
+            cpu = cpu_percent()
+            mem = mem_used_gb()
+            temp = temperature()
+            batt, batt_state = battery()
+            bright = brightness()
+            down = down_rate(iface)
+            bt = bluetooth_on()
+            net = "off" if not iface else ("wifi" if iface.startswith("wl") else "eth")
+
+            send("hypr/brightness", {"bright": bright})
+            send("hypr/battery", {"batt": batt, "battState": batt_state})
+            send("hypr/network", {"net": net, "ssid": ssid, "down": down})
+            send("hypr/bluetooth", {"bt": bt})
+            send("hypr/system", {"cpu": cpu, "mem": mem, "temp": temp, "uptime": uptime()})
 
         # Per-signal topics, so a subscriber can take just the one it cares
         # about and never wake for the rest.
         send("hypr/audio", {"vol": vol, "muted": muted})
-        send("hypr/brightness", {"bright": bright})
-        send("hypr/battery", {"batt": batt, "battState": batt_state})
-        send("hypr/network", {"net": net, "ssid": ssid, "down": down})
-        send("hypr/bluetooth", {"bt": bt})
-        send("hypr/system", {"cpu": cpu, "mem": mem, "temp": temp, "uptime": uptime()})
         send("hypr/theme", {"dark": dark})
         send("hypr/power", {"profile": power_profile()})
 
         # The combined object, in exactly the shape hypr-bar-state produced, so
         # Bar.qml needed no change to its parsing when it moved onto the bus.
+        # Fields the current wakeup was not about simply carry their last
+        # sampled value forward unchanged, so Bar.qml's property assignment is
+        # a no-op for them -- QML only re-renders on an actual value change.
         send("hypr/state", {
             "cpu": cpu, "mem": mem, "temp": temp,
             "batt": batt, "battState": batt_state,
@@ -838,8 +868,13 @@ def main():
         # TICK, so one slow read -- a stalled wpctl, say -- does not push every
         # later tick late.
         elapsed = time.monotonic() - started
-        flags.woke.wait(timeout=max(0.02, TICK - elapsed))
+        woke_early = flags.woke.wait(timeout=max(0.02, TICK - elapsed))
         flags.woke.clear()
+        # wait() returns True when a watcher thread set the event before the
+        # timeout (an early, single-field wake) and False when the timeout
+        # itself elapsed (a real tick) -- that return value IS the signal for
+        # whether the tick-bound sensors are due again.
+        due = not woke_early
 
 
 if __name__ == "__main__":
