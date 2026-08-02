@@ -192,3 +192,47 @@ The reliable placement for a one-off icon, regardless of what the packaged
 theme chain resolves: `~/.local/share/icons/hicolor/scalable/apps/<name>.svg`.
 `hicolor` is always the final, guaranteed fallback per the freedesktop icon
 spec, so this works even when the active theme is broken or absent.
+
+## Black screen after opening the lid, sometimes
+
+Lid closed, machine suspends normally; lid opened later and the panel stays
+black, unresponsive to keys or the trackpad. Not every time -- reproduced once
+after a 52-minute suspend, not on shorter ones.
+
+Investigated via `journalctl -b -1` around the actual resume timestamp rather
+than guessed at: the kernel's own resume sequence completed cleanly (i915 GuC/
+HuC firmware reload, NVMe re-init, Wi-Fi re-association), hypridle's
+`after_sleep_cmd` ran and reported `hyprctl dispatch 'hl.dsp.dpms("on")'` ->
+`ok`, and `hypr-resume-refresh.service` finished without error -- every
+software-level signal says the resume succeeded. That combination -- a clean
+software resume with a still-black panel that a DPMS toggle does not fix --
+points below the compositor, at the display's own power state rather than
+anything Hyprland or hypridle can see or retry.
+
+This machine is Alder Lake-P (`Intel Iris Xe Graphics`, confirmed via
+`lspci -k`), and ADL-P has a long-documented i915 bug where deep display
+C-states (DC5/DC6) fail to re-link the eDP panel after an s2idle resume. The
+kernel cmdline already carried `i915.enable_psr=0` (Panel Self Refresh, the
+usual first suspect for this exact symptom) from an earlier round of this same
+problem, plus a since-dead `i915.enable_rc6=0` -- that parameter no longer
+exists under `/sys/module/i915/parameters/` on this kernel, so it has been
+inert for a while. Checked what was still live:
+
+```sh
+for f in enable_dc enable_fbc enable_psr2_sel_fetch; do
+    echo "$f = $(sudo cat /sys/module/i915/parameters/$f)"
+done
+# enable_dc = -1   <- platform default, i.e. NOT disabled
+```
+
+`enable_dc = -1` means the deep DC states this bug is attributed to were still
+live. Added `i915.enable_dc=0` to `GRUB_CMDLINE_LINUX_DEFAULT` in
+`/etc/default/grub`, then `sudo grub-mkconfig -o /boot/grub/grub.cfg` to
+regenerate. **Needs a reboot to take effect**, and because this only
+reproduced after a long suspend, confirming the fix means normal use over a
+few days, not a single quick lid close/open.
+
+Known trade-off: disabling DC5/DC6 gives up some of the panel's deepest idle
+power state, which costs a small amount of battery during long suspends. Kept
+anyway -- an unusable black screen after a suspend that should just work costs
+more than the battery does.
