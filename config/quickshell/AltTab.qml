@@ -303,9 +303,9 @@ Scope {
                 Grid {
                     id: row
                     anchors.horizontalCenter: parent.horizontalCenter
-                    spacing: 10
+                    spacing: 14
 
-                    readonly property int cell: 96 + spacing
+                    readonly property int cell: 150 + spacing
                     columns: Math.max(1, Math.min(at.groups.length,
                                  Math.floor((panel.width - 120 + spacing) / cell)))
 
@@ -315,8 +315,8 @@ Scope {
                             required property var modelData
                             required property int index
 
-                            width: 96; height: 96
-                            radius: 18
+                            width: 150; height: 150
+                            radius: 22
                             // The currently selected tile is set off in colour,
                             // so it is clear what will be raised on release.
                             color: index === at.index ? Theme.mauve
@@ -337,7 +337,7 @@ Scope {
                             WindowThumb {
                                 anchors.fill: parent
                                 anchors.margins: parent.border.width
-                                radius: 16
+                                radius: 20
                                 cls: modelData.key
                                 winTitle: modelData.windows.length > 0
                                           ? modelData.windows[0].title : ""
@@ -352,8 +352,8 @@ Scope {
                                 anchors.right: parent.right
                                 anchors.bottom: parent.bottom
                                 anchors.margins: parent.border.width
-                                height: 22
-                                radius: 16
+                                height: 28
+                                radius: 20
                                 color: index === at.index
                                        ? Qt.rgba(Theme.mauve.r, Theme.mauve.g, Theme.mauve.b, 0.9)
                                        : Qt.rgba(0, 0, 0, 0.55)
@@ -366,12 +366,12 @@ Scope {
                                 }
                                 Text {
                                     anchors.centerIn: parent
-                                    width: parent.width - 10
+                                    width: parent.width - 14
                                     horizontalAlignment: Text.AlignHCenter
                                     text: modelData.name
                                     color: index === at.index ? Theme.crust : "white"
                                     font.family: Theme.uiFont
-                                    font.pixelSize: 10
+                                    font.pixelSize: 12
                                     elide: Text.ElideRight
                                 }
                             }
@@ -380,12 +380,12 @@ Scope {
                             Text {
                                 anchors.right: parent.right
                                 anchors.top: parent.top
-                                anchors.margins: 5
+                                anchors.margins: 7
                                 visible: modelData.windows.length > 1
                                 text: Theme.ico(0xf0140) + " " + modelData.windows.length
                                 color: index === at.index ? Theme.crust : "white"
                                 font.family: Theme.uiFont
-                                font.pixelSize: 10
+                                font.pixelSize: 12
                                 style: Text.Outline
                                 styleColor: Qt.rgba(0, 0, 0, 0.5)
                             }
@@ -421,7 +421,7 @@ Scope {
                     text: Theme.ico(0xf0140) + "  Pfeil runter für alle Fenster"
                     color: Theme.surface2
                     font.family: Theme.uiFont
-                    font.pixelSize: 10
+                    font.pixelSize: 11
                 }
             }
         }
@@ -438,10 +438,10 @@ Scope {
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: panelBox.bottom
             anchors.topMargin: 16
-            spacing: 10
+            spacing: 14
             visible: at.subIndex !== -1 && at.groups.length > 0
 
-            readonly property int cell: 160 + spacing
+            readonly property int cell: 220 + spacing
             readonly property int count: (at.subIndex !== -1 && at.groups[at.index])
                                          ? at.groups[at.index].windows.length : 0
             columns: Math.max(1, Math.min(count,
@@ -461,7 +461,7 @@ Scope {
                     required property int index
                     readonly property bool picked: index === at.subIndex
 
-                    width: 160; height: 100
+                    width: 220; height: 140
 
                     // Drop shadow. Not DropShadow from Qt5Compat: that would be
                     // an extra dependency for an effect a slightly offset, soft
@@ -477,7 +477,7 @@ Scope {
                     Rectangle {
                         id: tile
                         anchors.fill: parent
-                        radius: 12
+                        radius: 16
                         color: Theme.crust
                         border.width: parent.picked ? 2 : 1
                         border.color: parent.picked ? Theme.mauve : Theme.surface1
@@ -486,7 +486,7 @@ Scope {
                         WindowThumb {
                             anchors.fill: parent
                             anchors.margins: tile.border.width
-                            radius: 10
+                            radius: 14
                             // Same app for every tile in this row, so the
                             // group's own key is the class; only the title
                             // distinguishes one window from the next.
@@ -501,8 +501,8 @@ Scope {
                             anchors.right: parent.right
                             anchors.bottom: parent.bottom
                             anchors.margins: tile.border.width
-                            height: 20
-                            radius: 10
+                            height: 26
+                            radius: 14
                             color: parent.picked
                                    ? Qt.rgba(Theme.mauve.r, Theme.mauve.g, Theme.mauve.b, 0.9)
                                    : Qt.rgba(0, 0, 0, 0.55)
@@ -515,12 +515,12 @@ Scope {
                             }
                             Text {
                                 anchors.centerIn: parent
-                                width: parent.width - 10
+                                width: parent.width - 14
                                 horizontalAlignment: Text.AlignHCenter
                                 text: modelData.title
                                 color: "white"
                                 font.family: Theme.uiFont
-                                font.pixelSize: 10
+                                font.pixelSize: 12
                                 elide: Text.ElideRight
                             }
                         }
