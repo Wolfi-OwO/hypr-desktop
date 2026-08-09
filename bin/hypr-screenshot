@@ -52,6 +52,11 @@ if pgrep -x slurp >/dev/null 2>&1; then
     sleep 0.2
 fi
 
+# Close any open Quickshell panel first. slurp and swappy each want the
+# keyboard for their own Escape-to-cancel/close, and a panel left open behind
+# them was fighting them for it -- one Escape press hit both and closed both.
+qs ipc call panels closeAll >/dev/null 2>&1
+
 notify() {
     command -v notify-send >/dev/null 2>&1 && notify-send -a "Screenshot" "$1" "${2:-}"
 }
