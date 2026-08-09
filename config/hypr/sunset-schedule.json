@@ -2,12 +2,12 @@
   "_comment": "Colour temperature per weekday. Edited by hypr-sunset-menu, read by hypr-sunset-scheduler. Times are local, 24h. Each entry applies from its hour until the next one. 6500 = daylight (no tint).",
   "enabled": true,
   "days": {
-    "mon": [{"h": 6,  "temp": 6500}, {"h": 20, "temp": 4500}, {"h": 23, "temp": 3800}],
-    "tue": [{"h": 6,  "temp": 6500}, {"h": 20, "temp": 4500}, {"h": 23, "temp": 3800}],
-    "wed": [{"h": 6,  "temp": 6500}, {"h": 20, "temp": 4500}, {"h": 23, "temp": 3800}],
-    "thu": [{"h": 6,  "temp": 6500}, {"h": 20, "temp": 4500}, {"h": 23, "temp": 3800}],
-    "fri": [{"h": 6,  "temp": 6500}, {"h": 21, "temp": 4500}, {"h": 24, "temp": 3800}],
-    "sat": [{"h": 8,  "temp": 6500}, {"h": 21, "temp": 4500}, {"h": 24, "temp": 3800}],
-    "sun": [{"h": 8,  "temp": 6500}, {"h": 20, "temp": 4500}, {"h": 23, "temp": 3800}]
+    "mon": [],
+    "tue": [],
+    "wed": [],
+    "thu": [],
+    "fri": [],
+    "sat": [],
+    "sun": []
   }
 }
