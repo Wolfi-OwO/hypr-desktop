@@ -3,7 +3,10 @@
 singleton Theme 1.0 Theme.qml
 singleton CalendarData 1.0 CalendarData.qml
 singleton Bus 1.0 Bus.qml
+singleton Exclusivity 1.0 Exclusivity.qml
+singleton AppGrouping 1.0 AppGrouping.qml
 NotificationCenter 1.0 NotificationCenter.qml
+ChargeIndicator 1.0 ChargeIndicator.qml
 QuickSettings 1.0 QuickSettings.qml
 Menus 1.0 Menus.qml
 Controls 1.0 Controls.qml

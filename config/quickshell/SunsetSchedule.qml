@@ -24,6 +24,16 @@ Scope {
     id: sched
 
     property bool panelOpen: false
+    onPanelOpenChanged: {
+        if (sched.panelOpen) Exclusivity.claim("sunset");
+        else Exclusivity.release("sunset");
+    }
+    Connections {
+        target: Exclusivity
+        function onOwnerChanged() {
+            if (Exclusivity.owner !== "sunset" && sched.panelOpen) sched.panelOpen = false;
+        }
+    }
     readonly property int barHeight: 40
 
     readonly property var dayKeys:   ["mon","tue","wed","thu","fri","sat","sun"]

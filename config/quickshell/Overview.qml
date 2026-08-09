@@ -24,6 +24,16 @@ Scope {
     id: ov
 
     property bool panelOpen: false
+    onPanelOpenChanged: {
+        if (ov.panelOpen) Exclusivity.claim("overview");
+        else Exclusivity.release("overview");
+    }
+    Connections {
+        target: Exclusivity
+        function onOwnerChanged() {
+            if (Exclusivity.owner !== "overview" && ov.panelOpen) ov.panelOpen = false;
+        }
+    }
     property var workspaces: []
     property int activeWs: 1
     property int selIndex: 0

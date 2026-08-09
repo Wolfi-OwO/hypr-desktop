@@ -22,6 +22,16 @@ Scope {
     id: cb
 
     property bool panelOpen: false
+    onPanelOpenChanged: {
+        if (cb.panelOpen) Exclusivity.claim("clipboard");
+        else Exclusivity.release("clipboard");
+    }
+    Connections {
+        target: Exclusivity
+        function onOwnerChanged() {
+            if (Exclusivity.owner !== "clipboard" && cb.panelOpen) cb.panelOpen = false;
+        }
+    }
     readonly property int barHeight: 40
 
     property var entries: []

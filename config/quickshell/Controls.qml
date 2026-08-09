@@ -8,12 +8,24 @@
 import Quickshell
 import Quickshell.Wayland
 import Quickshell.Io
+import Quickshell.Bluetooth
+import Quickshell.Services.Pipewire
 import QtQuick
 
 Scope {
     id: ctl
 
     property string active: ""        // "brightness" | "volume" | "bluetooth" | ""
+    onActiveChanged: {
+        if (ctl.active !== "") Exclusivity.claim("controls");
+        else Exclusivity.release("controls");
+    }
+    Connections {
+        target: Exclusivity
+        function onOwnerChanged() {
+            if (Exclusivity.owner !== "controls" && ctl.active !== "") ctl.active = "";
+        }
+    }
 
     // Horizontal centre of the bar icon that opened this panel, in bar
     // coordinates. -1 falls back to the right edge, which is where all three
@@ -34,9 +46,22 @@ Scope {
     property int brightness: 50
     property int volume: 50
     property bool muted: false
-    property bool btPowered: false
-    property var btDevices: []
-    property bool btBusy: false
+
+    // ---- Bluetooth state ----------------------------------------------------
+    //
+    // Off Quickshell.Bluetooth (BlueZ over D-Bus) instead of polling
+    // `bluetoothctl show`/`devices`/`info` every 4 s. `bluetoothctl devices`
+    // only ever lists devices BlueZ already knows about -- there was no way to
+    // discover and pair a NEW device from this panel at all, which was the
+    // actual reason blueman-manager stayed necessary. Live and reactive now,
+    // same as volume and brightness already were.
+    readonly property var btAdapter: Bluetooth.defaultAdapter
+    readonly property bool btPowered: ctl.btAdapter ? ctl.btAdapter.enabled : false
+    readonly property bool btScanning: ctl.btAdapter ? ctl.btAdapter.discovering : false
+    readonly property var btAllDevices: ctl.btAdapter && ctl.btAdapter.devices
+                                         ? ctl.btAdapter.devices.values : []
+    readonly property var btPairedDevices: ctl.btAllDevices.filter(d => d.paired || d.bonded)
+    readonly property var btNearbyDevices: ctl.btAllDevices.filter(d => !d.paired && !d.bonded)
 
     // The function names must NOT match the property names: brightness and
     // volume both exist as properties, which made "volume" wrongly open the
@@ -60,10 +85,20 @@ Scope {
         ctl.anchorX = (centreX === undefined || centreX === null) ? -1 : centreX;
         if (ctl.active === which) { ctl.active = ""; return; }
         ctl.active = which;
-        // No reader kick for volume or brightness: both arrive on the bus and
-        // are already current before the panel opens. Bluetooth still needs one
-        // -- the device list is not on the bus, only the power state is.
-        if (which === "bluetooth") { ctl.btBusy = true; readBt.running = true; }
+        // No reader kick needed anywhere any more: volume and brightness
+        // arrive on the bus, and the Bluetooth device list is now live off
+        // Quickshell.Bluetooth (see the Binding below for scanning).
+    }
+
+    // Scanning for NEW devices only while the Bluetooth panel is actually
+    // open and the adapter is powered -- there is no reason to keep
+    // discovery running in the background once nobody is looking at the
+    // list, and BlueZ can't discover with the adapter off anyway.
+    Binding {
+        target: ctl.btAdapter
+        property: "discovering"
+        value: ctl.active === "bluetooth" && ctl.btPowered
+        when: ctl.btAdapter !== null
     }
 
     // Detached: see the note in Menus.qml. A reload must not kill what the
@@ -97,7 +132,10 @@ Scope {
             if (d.vol !== undefined && !ctl.volumeDragging)         ctl.volume = d.vol;
             if (d.muted !== undefined)                              ctl.muted = d.muted;
             if (d.bright !== undefined && !ctl.brightnessDragging)  ctl.brightness = d.bright;
-            if (d.bt !== undefined)                                 ctl.btPowered = d.bt === "on";
+            // Bluetooth power no longer comes off this bus topic for THIS
+            // panel -- ctl.btPowered now reads BlueZ directly and live via
+            // Quickshell.Bluetooth. The "bt" topic still exists for Bar.qml's
+            // own icon, which is unrelated and untouched.
             // Resource figures for the system panel.
             if (d.cpu !== undefined)    ctl.sysCpu = d.cpu;
             if (d.mem !== undefined)    ctl.sysMem = d.mem;
@@ -113,36 +151,32 @@ Scope {
     property bool volumeDragging: false
     property bool brightnessDragging: false
 
-    Process {
-        id: readBt
-        command: ["sh", "-c",
-            "bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' && echo on || echo off; " +
-            "echo '---'; " +
-            "bluetoothctl devices 2>/dev/null | while read -r _ mac name; do " +
-            "  st=$(bluetoothctl info \"$mac\" 2>/dev/null | grep -c 'Connected: yes'); " +
-            "  printf '%s\\t%s\\t%s\\n' \"$mac\" \"$name\" \"$st\"; done | head -8"]
-        stdout: StdioCollector {
-            onStreamFinished: {
-                const parts = this.text.split("---");
-                ctl.btPowered = (parts[0] || "").trim() === "on";
-                const rows = (parts[1] || "").trim().split("\n").filter(l => l.indexOf("\t") > 0);
-                ctl.btDevices = rows.map(l => {
-                    const c = l.split("\t");
-                    return { mac: c[0], name: c[1], connected: c[2] === "1" };
-                });
-                ctl.btBusy = false;
-            }
-        }
-    }
+    // ---- Per-application mixer ----------------------------------------------
+    //
+    // The master slider above stays off the wpctl/bus path -- it already works
+    // and Bar.qml's own icon depends on the same bus values, no reason to
+    // duplicate that source of truth. What was actually missing next to it,
+    // and the real reason pavucontrol still got opened, is a per-app mixer:
+    // there is no bus topic for individual streams, and there was no UI for
+    // one at all. Built off Quickshell.Services.Pipewire, which talks to
+    // PipeWire directly -- nothing here shells out.
+    readonly property var pwStreams: Pipewire.nodes
+        ? Pipewire.nodes.values.filter(n => n.isStream && n.audio
+                                             && (n.type & PwNodeType.AudioOutStream))
+        : []
 
-    // Bluetooth device list only. Volume and brightness are on the bus and need
-    // no timer at all; the device list has no event source here, so it is
-    // refreshed while its panel is open and not otherwise.
+    // Nodes are only live-updated while something is tracking them -- without
+    // this, a stream's volume/muted properties do not refresh as it changes
+    // elsewhere (the app itself, or another mixer).
+    PwObjectTracker { objects: ctl.pwStreams }
+
+    // Bluetooth adapter/device power-on needs the rfkill soft-block lifted
+    // first (see the note by the toggle below); this is the delay between
+    // that unblock and the moment BlueZ's Powered setter is actually tried.
     Timer {
-        interval: 4000
-        running: ctl.active === "bluetooth"
-        repeat: true
-        onTriggered: readBt.running = true
+        id: btPowerOnDelay
+        interval: 300
+        onTriggered: if (ctl.btAdapter) ctl.btAdapter.enabled = true
     }
 
     // =======================================================================
@@ -219,7 +253,11 @@ Scope {
             x: ctl.anchorX < 0
                ? parent.width - width - 6
                : Math.max(6, Math.min(parent.width - width - 6, ctl.anchorX - width / 2))
-            Behavior on x { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
+            // enabled: ctl.active !== "" -- without it this ran on the very
+            // FIRST open too, animating in from whatever `x` happened to
+            // default to before anything had ever opened (anchorX starts at
+            // -1). Same fix as QuickSettings.qml and Menus.qml.
+            Behavior on x { enabled: ctl.active !== ""; NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
             width: 330
             height: body.implicitHeight + 26
             radius: 20
@@ -343,6 +381,96 @@ Scope {
                     }
                 }
 
+                // ---------------- per-app mixer ----------------
+                Text {
+                    visible: ctl.active === "volume" && ctl.pwStreams.length > 0
+                    text: "ANWENDUNGEN"
+                    color: Theme.surface2
+                    font.family: Theme.uiFont
+                    font.pixelSize: 10
+                    font.weight: Font.Bold
+                    leftPadding: 4
+                    topPadding: 2
+                }
+
+                Flickable {
+                    visible: ctl.active === "volume" && ctl.pwStreams.length > 0
+                    width: parent.width
+                    height: Math.min(220, mixerCol.implicitHeight)
+                    contentHeight: mixerCol.implicitHeight
+                    clip: true
+
+                    Column {
+                        id: mixerCol
+                        width: parent.width
+                        spacing: 8
+
+                        Repeater {
+                            model: ctl.active === "volume" ? ctl.pwStreams : []
+                            delegate: Rectangle {
+                                id: streamRow
+                                required property var modelData
+                                width: mixerCol.width
+                                height: 52
+                                radius: 14
+                                color: Qt.rgba(Theme.base.r, Theme.base.g, Theme.base.b, 0.9)
+
+                                Column {
+                                    anchors.centerIn: parent
+                                    width: parent.width - 24
+                                    spacing: 6
+
+                                    Row {
+                                        width: parent.width
+                                        Text {
+                                            width: parent.width - 60
+                                            text: streamRow.modelData.description.length > 0
+                                                  ? streamRow.modelData.description
+                                                  : streamRow.modelData.name
+                                            color: Theme.text
+                                            font.family: Theme.uiFont
+                                            font.pixelSize: 12
+                                            elide: Text.ElideRight
+                                        }
+                                        Text {
+                                            width: 50
+                                            horizontalAlignment: Text.AlignRight
+                                            text: streamRow.modelData.audio.muted ? "stumm"
+                                                : Math.round(streamRow.modelData.audio.volume * 100) + "%"
+                                            color: Theme.subtext
+                                            font.family: Theme.uiFont
+                                            font.pixelSize: 11
+                                        }
+                                    }
+
+                                    Row {
+                                        width: parent.width
+                                        spacing: 8
+                                        Text {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: Theme.ico(streamRow.modelData.audio.muted ? 0xf0581 : 0xf057e)
+                                            color: streamRow.modelData.audio.muted ? Theme.surface2 : Theme.sapphire
+                                            font.family: Theme.uiFont
+                                            font.pixelSize: 13
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                anchors.margins: -6
+                                                onClicked: streamRow.modelData.audio.muted = !streamRow.modelData.audio.muted
+                                            }
+                                        }
+                                        Slider {
+                                            width: parent.width - 24
+                                            value: Math.round(streamRow.modelData.audio.volume * 100)
+                                            accent: streamRow.modelData.audio.muted ? Theme.surface2 : Theme.sapphire
+                                            onMoved: function (v) { streamRow.modelData.audio.volume = v / 100; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // ---------------- System resources ----------------
                 //
                 // What the download, memory and temperature readings in the bar
@@ -446,7 +574,8 @@ Scope {
                             anchors.left: parent.left
                             anchors.leftMargin: 44
                             anchors.verticalCenter: parent.verticalCenter
-                            text: ctl.btPowered ? "Eingeschaltet" : "Ausgeschaltet"
+                            text: ctl.btPowered ? (ctl.btAdapter ? ctl.btAdapter.name : "Eingeschaltet")
+                                                 : "Ausgeschaltet"
                             color: Theme.text
                             font.family: Theme.uiFont
                             font.pixelSize: 13
@@ -472,88 +601,96 @@ Scope {
                             MouseArea {
                                 anchors.fill: parent
                                 onClicked: {
-                                    // rfkill FIRST, then bluetoothctl.
+                                    // rfkill FIRST, then the adapter's own
+                                    // Powered property (Quickshell.Bluetooth,
+                                    // i.e. BlueZ directly -- no more shelling to
+                                    // bluetoothctl for this half).
                                     //
-                                    // `bluetoothctl power on` cannot lift an
-                                    // rfkill soft block -- it reports success or
-                                    // silently does nothing while the adapter
-                                    // stays down, which is exactly how Bluetooth
-                                    // became impossible to switch on: hci0 sat
-                                    // soft-blocked and the toggle had no way to
-                                    // clear it. Suspend/resume and the firmware
-                                    // hotkey can both set that block.
+                                    // BlueZ's Powered setter cannot lift an
+                                    // rfkill soft block itself -- it reports
+                                    // success or silently does nothing while the
+                                    // adapter stays down, which is exactly how
+                                    // Bluetooth became impossible to switch on:
+                                    // hci0 sat soft-blocked and the toggle had no
+                                    // way to clear it. Suspend/resume and the
+                                    // firmware hotkey can both set that block.
+                                    // btPowerOnDelay gives the kernel a beat
+                                    // before BlueZ is asked to power up.
                                     //
                                     // Blocking on the way off too, so the switch
                                     // is symmetric and the adapter does not come
                                     // back by itself after a resume.
-                                    ctl.run(ctl.btPowered
-                                        ? "bluetoothctl power off; rfkill block bluetooth"
-                                        : "rfkill unblock bluetooth; sleep 0.3; bluetoothctl power on");
-                                    ctl.btPowered = !ctl.btPowered;
+                                    if (ctl.btPowered) {
+                                        if (ctl.btAdapter) ctl.btAdapter.enabled = false;
+                                        ctl.run("rfkill block bluetooth");
+                                    } else {
+                                        ctl.run("rfkill unblock bluetooth");
+                                        btPowerOnDelay.restart();
+                                    }
                                 }
                             }
                         }
                     }
 
                     Text {
-                        visible: ctl.btBusy
-                        text: "Suche Geräte…"
+                        visible: ctl.btPowered && ctl.btPairedDevices.length === 0
+                                 && ctl.btNearbyDevices.length === 0
+                        text: ctl.btScanning ? "Suche Geräte…" : "Keine Geräte gefunden"
                         color: Theme.subtext
                         font.family: Theme.uiFont
                         font.pixelSize: 12
                         padding: 8
                     }
 
-                    Text {
-                        visible: !ctl.btBusy && ctl.btDevices.length === 0 && ctl.btPowered
-                        text: "Keine gekoppelten Geräte"
-                        color: Theme.surface2
-                        font.family: Theme.uiFont
-                        font.pixelSize: 12
-                        padding: 8
+                    // Paired first -- these are the everyday case (headphones,
+                    // mouse) and should not scroll below whatever happens to be
+                    // discoverable nearby at the moment.
+                    Repeater {
+                        model: ctl.active === "bluetooth" ? ctl.btPairedDevices : []
+                        delegate: DeviceRow { paired: true }
                     }
 
-                    Repeater {
-                        model: ctl.active === "bluetooth" ? ctl.btDevices : []
-                        delegate: Rectangle {
-                            required property var modelData
-                            width: body.width
-                            height: 36
-                            radius: 11
-                            color: bh.hovered ? Theme.surface1 : "transparent"
-                            Behavior on color { ColorAnimation { duration: 90 } }
-                            HoverHandler { id: bh }
+                    Text {
+                        visible: ctl.active === "bluetooth" && ctl.btNearbyDevices.length > 0
+                        text: "VERFÜGBAR"
+                        color: Theme.surface2
+                        font.family: Theme.uiFont
+                        font.pixelSize: 10
+                        font.weight: Font.Bold
+                        leftPadding: 4
+                        topPadding: 4
+                    }
 
-                            Text {
-                                anchors.left: parent.left
-                                anchors.leftMargin: 12
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: Theme.ico(modelData.connected ? 0xf00af : 0xf00b1)
-                                color: modelData.connected ? Theme.green : Theme.subtext
-                                font.family: Theme.uiFont
-                                font.pixelSize: 14
-                            }
-                            Text {
-                                anchors.left: parent.left
-                                anchors.leftMargin: 42
-                                anchors.right: parent.right
-                                anchors.rightMargin: 12
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: modelData.name
-                                color: Theme.text
-                                font.family: Theme.uiFont
-                                font.pixelSize: 13
-                                elide: Text.ElideRight
-                            }
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: {
-                                    ctl.run("bluetoothctl " +
-                                            (modelData.connected ? "disconnect " : "connect ") +
-                                            modelData.mac);
-                                    ctl.active = "";
-                                }
-                            }
+                    // Unpaired devices BlueZ can currently see -- this is the
+                    // part that did not exist before at all: the old panel only
+                    // ever showed `bluetoothctl devices` (already-paired), so
+                    // pairing something new had no path except blueman-manager.
+                    Repeater {
+                        model: ctl.active === "bluetooth" ? ctl.btNearbyDevices : []
+                        delegate: DeviceRow { paired: false }
+                    }
+
+                    Rectangle {
+                        visible: ctl.active === "bluetooth" && ctl.btPowered
+                        width: parent.width
+                        height: 34
+                        radius: 11
+                        color: scanHover.hovered ? Theme.surface1 : "transparent"
+                        Behavior on color { ColorAnimation { duration: 90 } }
+                        HoverHandler { id: scanHover }
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: ctl.btScanning ? "Suche läuft…" : "Nach Geräten suchen"
+                            color: ctl.btScanning ? Theme.subtext : Theme.mauve
+                            font.family: Theme.uiFont
+                            font.pixelSize: 12
+                            font.weight: Font.Bold
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            enabled: !ctl.btScanning
+                            onClicked: if (ctl.btAdapter) ctl.btAdapter.discovering = true
                         }
                     }
                 }
@@ -612,6 +749,96 @@ Scope {
         function apply(px) {
             const v = Math.round(Math.max(0, Math.min(1, px / width)) * 100);
             moved(v);
+        }
+    }
+
+    // A Bluetooth device row -- paired (click connects/disconnects, has a
+    // forget button) or nearby-and-unpaired (click pairs). All the actions
+    // are methods on the BluetoothDevice object itself (Quickshell.Bluetooth),
+    // so this needs nothing from the outer scope.
+    //
+    // Declared as a top-level component, not inline in the Repeater delegate,
+    // for the same reason as MenuRow in Menus.qml: `width: parent.width` HAS
+    // to mean the Repeater's own parent, not some Column further up that a
+    // component boundary can no longer see.
+    component DeviceRow: Rectangle {
+        id: devRow
+        required property var modelData
+        property bool paired: false
+
+        width: parent ? parent.width : 300
+        height: 36
+        radius: 11
+        color: dh.hovered ? Theme.surface1 : "transparent"
+        Behavior on color { ColorAnimation { duration: 90 } }
+        HoverHandler { id: dh }
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: {
+                if (devRow.modelData.connected) devRow.modelData.disconnect();
+                else if (devRow.paired) devRow.modelData.connect();
+                else devRow.modelData.pair();
+            }
+        }
+
+        Text {
+            anchors.left: parent.left
+            anchors.leftMargin: 12
+            anchors.verticalCenter: parent.verticalCenter
+            text: Theme.ico(devRow.modelData.connected ? 0xf00af : 0xf00b1)
+            color: devRow.modelData.connected ? Theme.green
+                 : (devRow.modelData.pairing ? Theme.yellow : Theme.subtext)
+            font.family: Theme.uiFont
+            font.pixelSize: 14
+        }
+
+        Text {
+            anchors.left: parent.left
+            anchors.leftMargin: 42
+            anchors.right: trailing.left
+            anchors.rightMargin: 8
+            anchors.verticalCenter: parent.verticalCenter
+            text: devRow.modelData.name.length > 0 ? devRow.modelData.name : devRow.modelData.deviceName
+            color: Theme.text
+            font.family: Theme.uiFont
+            font.pixelSize: 13
+            elide: Text.ElideRight
+        }
+
+        Row {
+            id: trailing
+            anchors.right: parent.right
+            anchors.rightMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 10
+
+            Text {
+                visible: devRow.modelData.batteryAvailable
+                anchors.verticalCenter: parent.verticalCenter
+                text: Math.round(devRow.modelData.battery * 100) + "%"
+                color: Theme.subtext
+                font.family: Theme.uiFont
+                font.pixelSize: 11
+            }
+
+            // Forget -- paired devices only. Plain text, not a Nerd Font glyph:
+            // every other icon here reuses a codepoint already proven to exist
+            // in this font from elsewhere in the shell; there was no already-
+            // verified one for "remove" and guessing one risks a blank box.
+            Text {
+                visible: devRow.paired
+                anchors.verticalCenter: parent.verticalCenter
+                text: "✕"
+                color: fh.hovered ? Theme.red : Theme.surface2
+                font.pixelSize: 12
+                HoverHandler { id: fh }
+                MouseArea {
+                    anchors.fill: parent
+                    anchors.margins: -6
+                    onClicked: devRow.modelData.forget()
+                }
+            }
         }
     }
 }

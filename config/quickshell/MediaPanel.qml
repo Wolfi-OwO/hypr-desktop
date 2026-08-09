@@ -20,6 +20,16 @@ Scope {
     id: media
 
     property bool panelOpen: false
+    onPanelOpenChanged: {
+        if (media.panelOpen) Exclusivity.claim("media");
+        else Exclusivity.release("media");
+    }
+    Connections {
+        target: Exclusivity
+        function onOwnerChanged() {
+            if (Exclusivity.owner !== "media" && media.panelOpen) media.panelOpen = false;
+        }
+    }
     readonly property int barHeight: 40
     property real anchorX: -1
 

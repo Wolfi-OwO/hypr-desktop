@@ -40,10 +40,18 @@ Item {
         const list = ToplevelManager.toplevels.values;
         // Exact title match wins; otherwise the first window of the same app,
         // for the reason in the header comment above.
+        //
+        // `cls` is the GROUPED key (AltTab hands over "brave", never the raw
+        // "brave-<pwa-hash>-Default"), so the real appId has to be normalised
+        // the same way before comparing -- straight equality against the raw
+        // appId could never match a grouped tile. That is why Brave's tile
+        // never went live: ScreencopyView was never even started, and its
+        // "no content" fallback sits on Theme.crust, dark enough to read as a
+        // dead black square rather than the icon it should have shown.
         let byClass = null;
         for (let i = 0; i < list.length; i++) {
             const t = list[i];
-            if ((t.appId || "").toLowerCase() !== cl) continue;
+            if (AppGrouping.norm(t.appId) !== cl) continue;
             if (t.title === thumb.winTitle) return t;
             if (byClass === null) byClass = t;
         }

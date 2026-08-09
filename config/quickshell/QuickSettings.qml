@@ -17,6 +17,16 @@ Scope {
     id: qs
 
     property bool panelOpen: false
+    onPanelOpenChanged: {
+        if (qs.panelOpen) Exclusivity.claim("quicksettings");
+        else Exclusivity.release("quicksettings");
+    }
+    Connections {
+        target: Exclusivity
+        function onOwnerChanged() {
+            if (Exclusivity.owner !== "quicksettings" && qs.panelOpen) qs.panelOpen = false;
+        }
+    }
     property string profile: "balanced"
     property string scheme: "prefer-dark"
     property string battPct: "—"
@@ -163,12 +173,24 @@ Scope {
             Behavior on scale   { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
             // Centred under the trigger, clamped to the screen; falls back to
             // the right edge when nothing told it where the trigger was.
-            anchors.right: qs.anchorX < 0 ? parent.right : undefined
-            anchors.rightMargin: 6
+            //
+            // NOT `anchors.right` mixed with an explicit `x` any more --
+            // assigning `undefined` to anchors.right conditionally does not
+            // reliably drop the previous binding (same finding as in
+            // Menus.qml), and at times both edges ended up anchored,
+            // stretching the card across the full screen width. An explicit
+            // x for both branches is unambiguous.
             x: qs.anchorX < 0
-               ? 0
+               ? parent.width - width - 6
                : Math.max(6, Math.min(parent.width - width - 6, qs.anchorX - width / 2))
-            Behavior on x { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
+            // Only animated once already open. Without `enabled` this ran on
+            // the very FIRST open too, sliding in from whatever `x` happened
+            // to default to before anything had ever opened (anchorX starts
+            // at -1) -- which is exactly the "panel is in the wrong place the
+            // first time" report: it did not spawn wrong, it spawned right
+            // and then visibly slid across from a stale starting point.
+            // Same fix as Menus.qml's card.
+            Behavior on x { enabled: qs.panelOpen; NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
             anchors.top: parent.top
             anchors.topMargin: qs.barHeight + (qs.panelOpen ? 4 : -6)   // just below the bar
             Behavior on anchors.topMargin { NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
@@ -460,3 +482,4 @@ Scope {
         }
     }
 }
+

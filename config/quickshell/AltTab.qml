@@ -29,6 +29,16 @@ Scope {
     id: at
 
     property bool shown: false
+    onShownChanged: {
+        if (at.shown) Exclusivity.claim("alttab");
+        else Exclusivity.release("alttab");
+    }
+    Connections {
+        target: Exclusivity
+        function onOwnerChanged() {
+            if (Exclusivity.owner !== "alttab" && at.shown) at.shown = false;
+        }
+    }
     property int index: 0
     property int subIndex: -1        // -1 = the group, otherwise a window in it
     property var groups: []          // [{ key, name, icon, windows:[...] }]
@@ -66,15 +76,11 @@ Scope {
 
                 // Collapse windows of the same application. Brave reports a
                 // separate class per PWA (brave-mjoklpl...), so shorten to the
-                // stem.
-                const norm = c => {
-                    const l = (c || "").toLowerCase();
-                    if (l.indexOf("brave") === 0) return "brave";
-                    if (l.indexOf("chromium") === 0 || l.indexOf("google-chrome") === 0) return "chromium";
-                    if (l.indexOf("code") === 0 || l.indexOf("codium") === 0) return "code";
-                    if (l.indexOf("jetbrains") !== -1) return "jetbrains";
-                    return l;
-                };
+                // stem. Shared with WindowThumb's match, in AppGrouping.qml --
+                // it used to be a local copy here that WindowThumb's strict
+                // equality check against the RAW appId could never satisfy,
+                // so grouped tiles never got a live thumbnail at all.
+                const norm = AppGrouping.norm;
 
                 // Display name from the normalised key, not from the raw
                 // window class: Brave reports something like
@@ -343,7 +349,15 @@ Scope {
                                           ? modelData.windows[0].title : ""
                                 active: at.shown
                                 fallbackIcon: at.iconFor(modelData.key)
-                                fallbackColour: index === at.index ? Theme.crust : Theme.text
+                                // Always readable: the tile behind it is
+                                // Theme.crust regardless of selection (the
+                                // border carries the selected look), so tying
+                                // this to `index === at.index` used to put
+                                // Theme.crust text on a Theme.crust tile --
+                                // invisible on exactly the selected tile,
+                                // which is what made the Brave group look
+                                // like a dead black square.
+                                fallbackColour: Theme.text
                             }
 
                             // Name scrim at the bottom, over the thumbnail.
