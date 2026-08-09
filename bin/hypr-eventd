@@ -301,9 +301,27 @@ def battery():
         if _bat_path is None:
             _bat_path = ""
     if not _bat_path:
-        return 0, "Unknown"
+        return 0, "Unknown", None
     cap = read(f"{_bat_path}/capacity", "0")
-    return (int(cap) if cap.isdigit() else 0), read(f"{_bat_path}/status", "Unknown")
+    status = read(f"{_bat_path}/status", "Unknown")
+
+    # Minutes to full, while charging. This hardware's ACPI driver exposes no
+    # time_to_full_now itself (checked: absent from sysfs on this machine) --
+    # this is the same division upower does internally (verified against it:
+    # 1.26 h here vs upower's reported "1,3 hours" for the same charge), just
+    # read straight from /sys instead of forking upower every tick.
+    eta_min = None
+    if status == "Charging":
+        energy_now  = read(f"{_bat_path}/energy_now", "")
+        energy_full = read(f"{_bat_path}/energy_full", "")
+        power_now   = read(f"{_bat_path}/power_now", "")
+        if energy_now.isdigit() and energy_full.isdigit() and power_now.isdigit():
+            p = int(power_now)
+            if p > 0:
+                remaining_wh = (int(energy_full) - int(energy_now)) / 1_000_000
+                eta_min = round(remaining_wh / (p / 1_000_000) * 60)
+
+    return (int(cap) if cap.isdigit() else 0), status, eta_min
 
 
 _bl_path = None
@@ -822,14 +840,14 @@ def main():
             cpu = cpu_percent()
             mem = mem_used_gb()
             temp = temperature()
-            batt, batt_state = battery()
+            batt, batt_state, batt_eta = battery()
             bright = brightness()
             down = down_rate(iface)
             bt = bluetooth_on()
             net = "off" if not iface else ("wifi" if iface.startswith("wl") else "eth")
 
             send("hypr/brightness", {"bright": bright})
-            send("hypr/battery", {"batt": batt, "battState": batt_state})
+            send("hypr/battery", {"batt": batt, "battState": batt_state, "etaMin": batt_eta})
             send("hypr/network", {"net": net, "ssid": ssid, "down": down})
             send("hypr/bluetooth", {"bt": bt})
             send("hypr/system", {"cpu": cpu, "mem": mem, "temp": temp, "uptime": uptime()})

@@ -22,6 +22,10 @@ ShellRoot {
     // readable). Quickshell is therefore the notification daemon.
     NotificationCenter { id: notifCentre }
 
+    // Brief overlay when the laptop starts charging (its own file; see
+    // ChargeIndicator.qml for why).
+    ChargeIndicator { id: chargeIndicator }
+
     // Quick Settings (battery, power profile, appearance, system).
     // Replaces the rofi dropdowns: under Wayland those did not close on a
     // click beside them, and sat far too low.
