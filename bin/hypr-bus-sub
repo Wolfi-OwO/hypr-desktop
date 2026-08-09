@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""mosquitto_sub that dies with the shell instead of outliving it.
+
+WHY THIS EXISTS
+---------------
+Quickshell's Process kills its child when the Process object is destroyed, but
+that only covers an orderly teardown. When the shell itself is killed -- by the
+hypr-shell-guard watchdog, by `pkill -x qs` during a restart, or by a crash --
+its mosquitto_sub children are simply reparented to init and keep running for
+the rest of the session. Nothing ever reaps them.
+
+Measured after one shell restart: 11 mosquitto_sub processes where there should
+have been 7. Three had ppid 1 and were subscribed to hypr/theme, hypr/weather
+and hypr/audio+brightness+bluetooth, each still holding a live broker
+connection. The watchdog restarts the shell whenever layer surfaces go missing,
+so over a long uptime this accumulates -- a slow leak of processes, file
+descriptors and broker sockets, plus retained messages being delivered to
+sockets nobody reads.
+
+The kernel has exactly the right primitive for this: PR_SET_PDEATHSIG asks for a
+signal when the PARENT dies, whatever the reason. It is not reachable from QML,
+hence this wrapper. It sets the flag, then execs mosquitto_sub -- so this adds
+no resident process of its own, only a couple of milliseconds at startup.
+
+Usage: identical to mosquitto_sub; every argument is passed straight through.
+
+    hypr-bus-sub -t hypr/audio -t hypr/brightness -q 0
+"""
+
+import ctypes
+import os
+import signal
+import sys
+
+PR_SET_PDEATHSIG = 1
+
+MOSQUITTO_SUB = "/usr/bin/mosquitto_sub"
+
+# The broker is reached over a unix socket; every caller passes the same one, so
+# it is supplied here rather than repeated at seven call sites in QML.
+SOCKET = f"/run/user/{os.getuid()}/mosquitto.sock"
+
+
+def main():
+    libc = ctypes.CDLL("libc.so.6", use_errno=True)
+
+    # Die when the parent dies. SIGTERM rather than SIGKILL so mosquitto_sub
+    # gets to close its connection cleanly; the broker then drops the session
+    # immediately instead of waiting for a keepalive timeout.
+    if libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0) != 0:
+        # Not fatal: without this the process merely behaves as it did before,
+        # so a kernel that refuses the call costs correctness, not function.
+        print(
+            f"hypr-bus-sub: PR_SET_PDEATHSIG failed: {os.strerror(ctypes.get_errno())}",
+            file=sys.stderr,
+        )
+
+    # A race the flag alone does not close: if the parent died between the fork
+    # and the prctl above, the signal was already sent and will never come
+    # again. getppid() == 1 means exactly that.
+    if os.getppid() == 1:
+        return 0
+
+    args = [MOSQUITTO_SUB, "--unix", SOCKET] + sys.argv[1:]
+    os.execv(MOSQUITTO_SUB, args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
