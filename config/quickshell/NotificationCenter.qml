@@ -20,6 +20,16 @@ Scope {
     id: nc
 
     property bool panelOpen: false
+    onPanelOpenChanged: {
+        if (nc.panelOpen) Exclusivity.claim("notifications");
+        else Exclusivity.release("notifications");
+    }
+    Connections {
+        target: Exclusivity
+        function onOwnerChanged() {
+            if (Exclusivity.owner !== "notifications" && nc.panelOpen) nc.panelOpen = false;
+        }
+    }
     // Seeded from disk, not hardcoded to false.
     //
     // Do-not-disturb used to reset on every shell restart -- and the shell
@@ -54,6 +64,20 @@ Scope {
     // this calendar and the desktop widget can never drift onto different
     // months. Paging goes through CalendarData.shiftMonth().
     readonly property date viewDate: new Date(CalendarData.year, CalendarData.month, 1)
+
+    // Which day's events show below the grid. The grid itself only ever
+    // showed dots -- there was no way to see what a dot meant, which is why
+    // the calendar read as decorative even after CalendarData gave it real
+    // data. shell.qml's desktop widget already solved this (selectedDay +
+    // an event list); this mirrors that pattern instead of inventing a
+    // second one.
+    property string selectedDay: CalendarData.todayKey()
+
+    function selectedDayLabel() {
+        const p = nc.selectedDay.split("-");
+        const d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+        return d.toLocaleDateString(Qt.locale("de_DE"), "dddd, d. MMMM").toUpperCase();
+    }
 
     // Open whatever sent a notification, then close the centre.
     //
@@ -188,6 +212,32 @@ Scope {
     }
 
     function twoDigit(n) { return n < 10 ? "0" + n : "" + n; }
+
+    // A usable image source for a notification, or "" if none resolves.
+    //
+    // `image` looked like the safe field to trust outright -- it is what
+    // NotificationServer already resolved appIcon into. But it resolves an
+    // icon NAME the same way the "image://icon/" provider does: unconditionally,
+    // as "image://icon/<name>", even when the icon theme has no such icon. The
+    // theme then substitutes its own broken-image checkerboard for the load,
+    // which is a successful Image.Ready -- there is no failure to check
+    // `status` against. That checkerboard is what "notification icons are
+    // broken" turned out to be. A real embedded image (a screenshot, a
+    // contact photo) arrives as a genuine path or data URI, never this
+    // prefix, so only the icon-provider form needs validating here.
+    function resolveIcon(n) {
+        if (!n) return "";
+        if (n.image !== "") {
+            if (n.image.indexOf("image://icon/") === 0) {
+                const name = n.image.substring("image://icon/".length);
+                return Quickshell.hasThemeIcon(name) ? n.image : "";
+            }
+            return n.image;
+        }
+        if (n.appIcon !== "" && Quickshell.hasThemeIcon(n.appIcon))
+            return "image://icon/" + n.appIcon;
+        return "";
+    }
 
     // =======================================================================
     //  TOASTS -- centred at the top
@@ -329,10 +379,10 @@ Scope {
                             anchors.verticalCenter: parent.verticalCenter
 
                             Image {
+                                id: toastIcon
                                 anchors.fill: parent
                                 anchors.margins: 3
-                                source: modelData.image !== "" ? modelData.image
-                                      : (modelData.appIcon !== "" ? "image://icon/" + modelData.appIcon : "")
+                                source: nc.resolveIcon(modelData)
                                 fillMode: Image.PreserveAspectFit
                                 smooth: true
                                 // See Menus.qml: without sourceSize the icon
@@ -342,11 +392,19 @@ Scope {
                                 sourceSize.width: 96
                                 sourceSize.height: 96
                                 asynchronous: true
-                                visible: source !== ""
+                                // hasThemeIcon, not just appIcon !== "": the
+                                // icon theme substitutes its own broken-image
+                                // checkerboard for a name it does not carry
+                                // instead of failing to load, so checking
+                                // Image.status never saw a failure -- the
+                                // lookup itself has to be validated first.
+                                // That checkerboard is what "notification
+                                // icons are broken" turned out to be.
+                                visible: source !== "" && status === Image.Ready
                             }
                             Text {
                                 anchors.centerIn: parent
-                                visible: modelData.image === "" && modelData.appIcon === ""
+                                visible: toastIcon.source === "" || toastIcon.status !== Image.Ready
                                 text: (modelData.appName || "?").charAt(0).toUpperCase()
                                 color: nc.cMauve
                                 font.family: nc.uiFont
@@ -598,21 +656,25 @@ Scope {
                                         color: nc.cSurface0
                                         anchors.verticalCenter: parent.verticalCenter
                                         Image {
+                                            id: listIcon
                                             anchors.fill: parent
                                             anchors.margins: 3
-                                            source: modelData.image !== "" ? modelData.image
-                                                  : (modelData.appIcon !== "" ? "image://icon/" + modelData.appIcon : "")
+                                            source: nc.resolveIcon(modelData)
                                             fillMode: Image.PreserveAspectFit
                                             smooth: true
                                             // See Menus.qml.
                                             sourceSize.width: 96
                                             sourceSize.height: 96
                                             asynchronous: true
-                                            visible: source !== ""
+                                            // See the toast icon above -- an
+                                            // appIcon the theme cannot resolve
+                                            // must fall back, not show the
+                                            // broken-image checkerboard.
+                                            visible: source !== "" && status === Image.Ready
                                         }
                                         Text {
                                             anchors.centerIn: parent
-                                            visible: modelData.image === "" && modelData.appIcon === ""
+                                            visible: listIcon.source === "" || listIcon.status !== Image.Ready
                                             text: (modelData.appName || "?").charAt(0).toUpperCase()
                                             color: nc.cMauve
                                             font.family: nc.uiFont
@@ -755,12 +817,15 @@ Scope {
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
                         text: "‹"
-                        color: nc.cSubtext
+                        color: prevMa.containsMouse ? nc.cMauve : nc.cSubtext
                         font.family: nc.uiFont
                         font.pixelSize: 18
                         MouseArea {
+                            id: prevMa
                             anchors.fill: parent
-                            anchors.margins: -8
+                            anchors.margins: -10
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
                             onClicked: {
                                 CalendarData.shiftMonth(-1);
                             }
@@ -773,17 +838,31 @@ Scope {
                         font.family: nc.uiFont
                         font.pixelSize: 14
                         font.weight: Font.Bold
+                        MouseArea {
+                            anchors.fill: parent
+                            anchors.margins: -8
+                            cursorShape: Qt.PointingHandCursor
+                            // Jumps back to today's month AND re-selects today,
+                            // matching the desktop widget's month-label behaviour.
+                            onClicked: {
+                                CalendarData.goToday();
+                                nc.selectedDay = CalendarData.todayKey();
+                            }
+                        }
                     }
                     Text {
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         text: "›"
-                        color: nc.cSubtext
+                        color: nextMa.containsMouse ? nc.cMauve : nc.cSubtext
                         font.family: nc.uiFont
                         font.pixelSize: 18
                         MouseArea {
+                            id: nextMa
                             anchors.fill: parent
-                            anchors.margins: -8
+                            anchors.margins: -10
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
                             onClicked: {
                                 CalendarData.shiftMonth(1);
                             }
@@ -824,6 +903,7 @@ Scope {
                     Repeater {
                         model: 42
                         delegate: Item {
+                            id: dayCell
                             required property int index
                             width: dayGrid.width / 7
                             height: 30
@@ -832,27 +912,51 @@ Scope {
                             readonly property var firstOfMonth: new Date(nc.viewDate.getFullYear(), nc.viewDate.getMonth(), 1)
                             readonly property int offset: (firstOfMonth.getDay() + 6) % 7
                             readonly property var cellDate: new Date(nc.viewDate.getFullYear(), nc.viewDate.getMonth(), index - offset + 1)
+                            readonly property string cellKey: CalendarData.dayKey(cellDate)
                             readonly property bool inMonth: cellDate.getMonth() === nc.viewDate.getMonth()
                             readonly property bool isToday:
                                 cellDate.getDate() === clk.date.getDate() &&
                                 cellDate.getMonth() === clk.date.getMonth() &&
                                 cellDate.getFullYear() === clk.date.getFullYear()
+                            readonly property bool picked: cellKey === nc.selectedDay
+                            readonly property var dayEvents: CalendarData.eventsFor(cellKey)
 
+                            // Selection ring -- otherwise there was no visible
+                            // difference between "clicked" and "not clicked",
+                            // which is half of why the calendar read as inert.
                             Rectangle {
                                 anchors.centerIn: parent
                                 width: 26; height: 26
                                 radius: 13
-                                color: parent.isToday ? nc.cMauve : "transparent"
+                                color: "transparent"
+                                border.width: 1.5
+                                border.color: nc.cLavender
+                                opacity: (dayCell.picked && !dayCell.isToday) ? 1 : 0
+                                Behavior on opacity { NumberAnimation { duration: 90 } }
+                            }
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: 26; height: 26
+                                radius: 13
+                                color: nc.cSurface1
+                                opacity: (dayHov.containsMouse && !dayCell.isToday) ? 0.6 : 0
+                                Behavior on opacity { NumberAnimation { duration: 90 } }
+                            }
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: 26; height: 26
+                                radius: 13
+                                color: dayCell.isToday ? nc.cMauve : "transparent"
                             }
                             Text {
                                 id: dayNum
                                 anchors.centerIn: parent
-                                text: parent.cellDate.getDate()
-                                color: parent.isToday ? nc.cCrust
-                                     : (parent.inMonth ? nc.cText : nc.cSurface2)
+                                text: dayCell.cellDate.getDate()
+                                color: dayCell.isToday ? nc.cCrust
+                                     : (dayCell.inMonth ? nc.cText : nc.cSurface2)
                                 font.family: nc.uiFont
                                 font.pixelSize: 12
-                                font.weight: parent.isToday ? Font.Bold : Font.Normal
+                                font.weight: dayCell.isToday ? Font.Bold : Font.Normal
                             }
 
                             // Event dots -- the whole point of the exercise.
@@ -868,21 +972,145 @@ Scope {
                                 anchors.top: dayNum.bottom
                                 anchors.topMargin: -3
                                 spacing: 2
-                                visible: parent.inMonth
+                                visible: dayCell.inMonth
 
                                 Repeater {
                                     // At most three, otherwise a busy day pushes
                                     // the dots wider than the cell.
-                                    model: Math.min(
-                                        3, CalendarData.eventsFor(
-                                            CalendarData.dayKey(cellDate)).length)
+                                    model: Math.min(3, dayCell.dayEvents.length)
                                     delegate: Rectangle {
+                                        required property int index
                                         width: 3; height: 3; radius: 1.5
-                                        color: isToday ? nc.cCrust : nc.cMauve
+                                        // Through dayCell's id, not a parent
+                                        // chain: inside this nested Repeater's
+                                        // delegate, an unqualified `isToday`
+                                        // silently resolved to undefined (always
+                                        // falsy), so every dot -- including on
+                                        // today's own filled circle -- rendered
+                                        // mauve instead of the crust colour that
+                                        // would actually contrast there.
+                                        color: dayCell.isToday ? nc.cCrust : nc.cMauve
                                     }
                                 }
                             }
+
+                            // Clicking a day only ever moved dots around a grid
+                            // with nothing behind them to look at -- there was
+                            // no MouseArea here at all before. Selecting a day
+                            // now drives the event list below the grid.
+                            MouseArea {
+                                id: dayHov
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: nc.selectedDay = dayCell.cellKey
+                            }
                         }
+                    }
+                }
+
+                // ---------------- selected day's events ---------------------
+                Rectangle {
+                    id: calDivider
+                    anchors.top: dayGrid.bottom
+                    anchors.topMargin: 10
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: nc.cSurface0
+                }
+
+                Text {
+                    id: selDayLabel
+                    anchors.top: calDivider.bottom
+                    anchors.topMargin: 10
+                    text: nc.selectedDayLabel()
+                    color: nc.cSubtext
+                    font.family: nc.uiFont
+                    font.pixelSize: 11
+                    font.weight: Font.Bold
+                }
+
+                ListView {
+                    id: evtList
+                    anchors.top: selDayLabel.bottom
+                    anchors.topMargin: 8
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    // Stop above the "Alle löschen" button rather than under it.
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: 44
+                    clip: true
+                    spacing: 6
+                    model: CalendarData.eventsFor(nc.selectedDay)
+                    boundsBehavior: Flickable.StopAtBounds
+
+                    delegate: Row {
+                        required property var modelData
+                        width: evtList.width
+                        spacing: 8
+
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 3; height: 16; radius: 1.5
+                            color: modelData.colour || nc.cMauve
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 46
+                            text: modelData.allday ? "ganztg" : modelData.time
+                            color: nc.cSubtext
+                            font.family: nc.uiFont
+                            font.pixelSize: 11
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: evtList.width - 62
+                            text: modelData.title
+                            color: nc.cText
+                            font.family: nc.uiFont
+                            font.pixelSize: 12
+                            elide: Text.ElideRight
+                        }
+                    }
+
+                    // A flat "wird geladen …" string looked identical whether
+                    // hypr-calendar was one second in or hung, so there was no
+                    // way to tell a slow fetch from a stuck one. Three dots
+                    // pulsing in a travelling wave at least says "still alive".
+                    Row {
+                        anchors.top: parent.top
+                        visible: evtList.count === 0 && CalendarData.loading
+                        spacing: 5
+
+                        Repeater {
+                            model: 3
+                            delegate: Rectangle {
+                                id: loadDot
+                                required property int index
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 5; height: 5; radius: 2.5
+                                color: nc.cMauve
+
+                                SequentialAnimation on opacity {
+                                    loops: Animation.Infinite
+                                    running: CalendarData.loading
+                                    PauseAnimation { duration: loadDot.index * 150 }
+                                    NumberAnimation { from: 0.25; to: 1;    duration: 350; easing.type: Easing.InOutQuad }
+                                    NumberAnimation { from: 1;    to: 0.25; duration: 350; easing.type: Easing.InOutQuad }
+                                    PauseAnimation { duration: (2 - loadDot.index) * 150 }
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        anchors.top: parent.top
+                        visible: evtList.count === 0 && !CalendarData.loading
+                        text: "Keine Termine"
+                        color: nc.cSurface2
+                        font.family: nc.uiFont
+                        font.pixelSize: 12
                     }
                 }
 
