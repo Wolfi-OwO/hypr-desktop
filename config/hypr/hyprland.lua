@@ -149,6 +149,14 @@ hl.env("QT_QPA_PLATFORM", "wayland;xcb")
 hl.env("QT_WAYLAND_DISABLE_WINDOWDECORATION", "1")
 hl.env("QT_AUTO_SCREEN_SCALE_FACTOR", "1")
 
+-- Without a platform theme plugin, Qt has no icon theme at all -- not even
+-- hicolor's own real icons resolve, so every Quickshell icon lookup (an
+-- app's own icon, a notification's appIcon) fell back to the icon THEME's
+-- own broken-image glyph, silently "successfully" loaded. qt6ct fixes that
+-- and reads the theme from ~/.config/qt6ct/qt6ct.conf (icon_theme=WhiteSur-dark,
+-- matching the GTK setting rather than duplicating it via gsettings).
+hl.env("QT_QPA_PLATFORMTHEME", "qt6ct")
+
 -- Run Electron apps (VS Code, Discord) natively on Wayland instead of
 -- XWayland. On a 2880x1800 panel at scale 2 this is the difference between
 -- crisp and blurry: XWayland clients render at 1x and get upscaled.
@@ -409,6 +417,15 @@ hl.config({
             -- which makes the pointer "stick" mid-sentence.
             disable_while_typing = false,
             scroll_factor        = 0.4,
+            -- Physical presses were not registering as clicks (only tap-to-click
+            -- worked) -- this is a clickpad (ELAN06FA I2C, one mechanical button
+            -- under the whole pad, `INPUT_PROP_BUTTONPAD` set per
+            -- /proc/bus/input/devices), and libinput's default click-detection
+            -- method for a clickpad is meant to be "clickfinger" (finger count/
+            -- position decides the button) rather than fixed button areas. Not
+            -- yet confirmed this was the actual mismatch -- forcing it
+            -- explicitly rather than trusting autodetection either way.
+            clickfinger_behavior = true,
         },
     },
 })
@@ -747,4 +764,18 @@ hl.window_rule({
     float  = true,
     size   = "640 360",
     pin    = true,
+})
+
+-- Quickshell's dropdown/popup cards (menus, quick settings, notification
+-- centre, ...) draw a near-opaque Rectangle and expect it to read as solid.
+-- Global blur is on for window decoration, and Hyprland applies it to
+-- layer-shell surfaces too unless told not to -- with it on, whatever sits
+-- behind the panel (a terminal, a scrolling page) blended straight through
+-- the "opaque" card, fully legible, even at alpha 1.0. Measured with grim:
+-- blur off made the card solid, alpha had no effect on its own. All of
+-- these share the "qs-" namespace prefix, so one regex covers them.
+hl.layer_rule({
+    name  = "no-blur-on-quickshell-panels",
+    match = { namespace = "^qs-.*$" },
+    blur  = false,
 })
