@@ -11,12 +11,45 @@
 import Quickshell
 import Quickshell.Wayland
 import Quickshell.Io
+import Quickshell.Networking
 import QtQuick
 
 Scope {
     id: menus
 
     property string active: ""       // "apps" | "places" | "wifi" | ""
+
+    // Guards the card's x/width Behavior (below) so a closed -> open
+    // transition jumps straight to place instead of sliding in.
+    //
+    // The previous attempt at this gated the Behavior with
+    // `enabled: menuWin.open`, a binding computed from the same `active`
+    // write that also drives x and width (via card.targetWidth, which
+    // depends on `active` too). QML gives no ordering guarantee between two
+    // independent bindings that react to the same source change -- measured
+    // live, `enabled` consistently lost that race, so the Behavior was
+    // already on by the time x jumped to its opening position, and it
+    // animated on every single open, not just occasionally.
+    //
+    // This is set to false in openMenu() below as a plain, sequential JS
+    // statement BEFORE `active` is written -- not from a signal handler
+    // reacting to the same change, which would have the identical ordering
+    // problem one level up. By the time `active`'s write fires the x/width/
+    // enabled cascade, posAnimReady is already settled at false; there is no
+    // race left to lose. It only flips back to true a tick later, via
+    // Qt.callLater, once the jump has already landed -- so switching between
+    // menus while already open still animates.
+    property bool posAnimReady: false
+    onActiveChanged: {
+        if (menus.active !== "") Exclusivity.claim("menus");
+        else Exclusivity.release("menus");
+    }
+    Connections {
+        target: Exclusivity
+        function onOwnerChanged() {
+            if (Exclusivity.owner !== "menus" && menus.active !== "") menus.active = "";
+        }
+    }
 
     // Horizontal centre of the bar item that opened the menu, in bar
     // coordinates. -1 means "not told", in which case the card falls back to
@@ -65,9 +98,28 @@ Scope {
     }
 
     property var appList: []
-    property var wifiList: []
-    property string wifiActive: ""
-    property bool wifiBusy: false
+
+    // ---- Wi-Fi state --------------------------------------------------------
+    //
+    // Off Quickshell.Networking (NetworkManager over D-Bus) rather than nmcli
+    // shell-outs -- reactive, no rescan-then-reparse round trip, and it exposes
+    // connectWithPsk(), which nmcli-without-a-saved-connection has no way to
+    // do. That gap -- no way to enter a password for a NEW secured network --
+    // was the actual reason this menu still forced a fallback to
+    // nm-connection-editor for anything but a network already known.
+    readonly property var wifiDevice: {
+        const list = Networking.devices ? Networking.devices.values : [];
+        for (let i = 0; i < list.length; i++) if (list[i].type === DeviceType.Wifi) return list[i];
+        return null;
+    }
+    readonly property var wifiNetworks: {
+        if (!menus.wifiDevice || !menus.wifiDevice.networks) return [];
+        return menus.wifiDevice.networks.values.slice()
+            .sort((a, b) => b.signalStrength - a.signalStrength);
+    }
+    // SSID of the network currently prompting for a password -- set by
+    // clicking an unknown secured network, cleared on submit/Escape/close.
+    property string wifiPskTarget: ""
 
     IpcHandler {
         target: "menu"
@@ -85,11 +137,28 @@ Scope {
     function openMenu(which, centreX) {
         menus.anchorX = (centreX === undefined || centreX === null) ? -1 : centreX;
         if (menus.active === which) { menus.active = ""; return; }
+        const wasClosed = menus.active === "";
+        // Sequential, not reactive: this write is guaranteed to land before
+        // `active` below triggers the x/width/enabled cascade, so there is
+        // nothing left to race. See the comment on posAnimReady above.
+        if (wasClosed) menus.posAnimReady = false;
         menus.active = which;
+        if (wasClosed) Qt.callLater(function() { menus.posAnimReady = true; });
+        menus.wifiPskTarget = "";
         // No loader kick for "apps": the list arrives on the bus and is already
         // in appList before the menu opens.
         if (which === "places") loadPlaces.running = true;
-        if (which === "wifi") { menus.wifiBusy = true; loadWifi.running = true; }
+    }
+
+    // Scanning tracks `active` declaratively (the Binding below) rather than
+    // being set at every one of the several places that can close this menu
+    // (click-outside, Escape, IPC hide, re-clicking the trigger) -- there is no
+    // reason to keep NetworkManager scanning once nobody is looking at the list.
+    Binding {
+        target: menus.wifiDevice
+        property: "scannerEnabled"
+        value: menus.active === "wifi"
+        when: menus.wifiDevice !== null
     }
 
     // Launch detached, NOT through a Process object.
@@ -163,32 +232,6 @@ Scope {
         }
     }
 
-    // ---- Wi-Fi -------------------------------------------------------------
-    Process {
-        id: loadWifi
-        // `--rescan no` reads the cache in about 40 ms; letting nmcli scan
-        // implicitly took 2.5 s and delayed the menu by exactly that much.
-        command: ["sh", "-c",
-            "nmcli -t -f NAME connection show --active | head -1; echo '---'; " +
-            "nmcli --terse --fields SSID,SIGNAL,SECURITY dev wifi list --rescan no " +
-            "| awk -F: '$1 != \"\" { if (!seen[$1]++) print }' | sort -t: -k2 -nr | head -12"]
-        stdout: StdioCollector {
-            onStreamFinished: {
-                const parts = this.text.split("---");
-                menus.wifiActive = (parts[0] || "").trim();
-                const rows = (parts[1] || "").trim().split("\n").filter(l => l.length);
-                menus.wifiList = rows.map(l => {
-                    const c = l.split(":");
-                    return { ssid: c[0], signal: parseInt(c[1] || "0"), sec: c[2] || "" };
-                });
-                menus.wifiBusy = false;
-                // Rescan in the background so the next invocation is fresh.
-                rescan.running = true;
-            }
-        }
-    }
-    Process { id: rescan; command: ["nmcli", "dev", "wifi", "rescan"] }
-
     // ---- Places ------------------------------------------------------------
     // Read from a script instead of hard-coding: the XDG paths on this machine
     // deviate a lot (downloads lower-case, pictures and videos below
@@ -213,6 +256,15 @@ Scope {
         if (sig >= 50) return Theme.ico(0xf0925);
         if (sig >= 25) return Theme.ico(0xf0922);
         return Theme.ico(0xf091f);
+    }
+
+    function submitWifiPsk(psk) {
+        const nets = menus.wifiDevice && menus.wifiDevice.networks
+                     ? menus.wifiDevice.networks.values : [];
+        for (let i = 0; i < nets.length; i++) {
+            if (nets[i].name === menus.wifiPskTarget) { nets[i].connectWithPsk(psk); break; }
+        }
+        menus.wifiPskTarget = "";
     }
 
     // =======================================================================
@@ -370,8 +422,8 @@ Scope {
             // rejects the duplicate at runtime -- "Attempting to set another
             // interceptor on QQuickRectangle property x - unsupported" in the
             // log -- so which of the two won was not something to rely on.
-            Behavior on x     { enabled: menuWin.open; NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
-            Behavior on width { enabled: menuWin.open; NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
+            Behavior on x     { enabled: menuWin.open && menus.posAnimReady; NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
+            Behavior on width { enabled: menuWin.open && menus.posAnimReady; NumberAnimation { duration: card.animMs; easing.type: Easing.OutCubic } }
 
             // The width the card is heading for, independent of the animation.
             readonly property int targetWidth: menus.active === "apps" ? 460 : 340
@@ -540,7 +592,7 @@ Scope {
 
                         // --- Wi-Fi ---
                         Text {
-                            visible: menus.active === "wifi" && menus.wifiBusy
+                            visible: menus.active === "wifi" && menus.wifiNetworks.length === 0
                             text: "Suche Netzwerke…"
                             color: Theme.subtext
                             font.family: Theme.uiFont
@@ -548,25 +600,92 @@ Scope {
                             padding: 10
                         }
                         Repeater {
-                            model: menus.active !== "wifi" ? [] : menus.wifiList
+                            model: menus.active !== "wifi" ? [] : menus.wifiNetworks
                             delegate: MenuRow {
                                 required property var modelData
                                 required property int index
-                                label: modelData.ssid
-                                iconText: menus.wifiIcon(modelData.signal)
+                                label: modelData.name
+                                iconText: menus.wifiIcon(modelData.signalStrength)
                                 stagger: Math.min(index * 16, 260)
-                                trailing: (modelData.sec !== "" && modelData.sec !== "--"
+                                trailing: (modelData.security !== WifiSecurityType.Open
                                            ? Theme.ico(0xf033e) : "")
-                                          + (modelData.ssid === menus.wifiActive
+                                          + (modelData.connected
                                              ? "  " + Theme.ico(0xf012c) : "")
-                                onTriggered: menus.run(
-                                    "nmcli connection up id '" + modelData.ssid + "' || " +
-                                    "nmcli dev wifi connect '" + modelData.ssid + "'")
+                                // A known network (one NM already has a saved
+                                // profile for) or an open one connects directly.
+                                // An unknown SECURED network has no saved PSK to
+                                // connect with -- that is exactly the case nmcli
+                                // silently failed on before, and the only reason
+                                // this menu still needed nm-connection-editor for
+                                // everyday use. Prompt for the password instead.
+                                onTriggered: {
+                                    if (modelData.connected) return;
+                                    if (modelData.known || modelData.security === WifiSecurityType.Open) {
+                                        modelData.connect();
+                                    } else {
+                                        menus.wifiPskTarget = modelData.name;
+                                    }
+                                }
                             }
                         }
+
+                        // ---- Password entry, unknown secured network only ----
+                        Rectangle {
+                            visible: menus.active === "wifi" && menus.wifiPskTarget !== ""
+                            width: parent.width
+                            height: pskCol.implicitHeight + 16
+                            radius: 12
+                            color: Qt.rgba(Theme.crust.r, Theme.crust.g, Theme.crust.b, 0.9)
+                            border.width: 1
+                            border.color: Theme.surface0
+
+                            Column {
+                                id: pskCol
+                                anchors.centerIn: parent
+                                width: parent.width - 20
+                                spacing: 6
+
+                                Text {
+                                    text: "Passwort für „" + menus.wifiPskTarget + "“"
+                                    color: Theme.subtext
+                                    font.family: Theme.uiFont
+                                    font.pixelSize: 11
+                                    elide: Text.ElideRight
+                                    width: parent.width
+                                }
+
+                                TextInput {
+                                    id: pskInput
+                                    width: parent.width
+                                    color: Theme.text
+                                    font.family: Theme.uiFont
+                                    font.pixelSize: 13
+                                    echoMode: TextInput.Password
+                                    focus: menus.wifiPskTarget !== ""
+                                    clip: true
+
+                                    // Same reasoning as the apps search field
+                                    // above: the surface does not exist yet the
+                                    // instant the field becomes visible, so the
+                                    // focus claim is deferred.
+                                    onVisibleChanged: if (visible) {
+                                        pskInput.text = "";
+                                        Qt.callLater(pskInput.forceActiveFocus);
+                                    }
+
+                                    Keys.onEscapePressed: menus.wifiPskTarget = ""
+                                    onAccepted: menus.submitWifiPsk(pskInput.text)
+                                }
+                            }
+                        }
+
+                        // Escape hatch for what the native panel does not cover
+                        // -- enterprise/802.1x auth, static IPs, VPN profiles.
+                        // Not the everyday path any more, so it moves to the
+                        // bottom of the list instead of being the only option.
                         MenuRow {
                             visible: menus.active === "wifi"
-                            label: "Netzwerkeinstellungen"
+                            label: "Erweiterte Netzwerkeinstellungen"
                             icon: 0xf0493
                             onTriggered: menus.run("nm-connection-editor")
                         }
