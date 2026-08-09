@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Forces a real DPMS off/on toggle after resume, then rechecks for ~44s and
+# re-forces it if the panel silently goes black again. A single "on" isn't
+# enough -- Hyprland can report dpmsStatus true while the panel stays dark,
+# so this doesn't trust one reading, only two in a row.
+#
+# Runs detached; the caller doesn't block on it.
+#
+# LOG (temporary, 2026-08-08): a "screen stays black for ~30s after opening
+# the lid" report doesn't match any known cause yet, and this loop -- up to
+# 22 retries, 2s apart -- is the only thing in the resume path whose own
+# worst case is close to that duration. Nothing here was ever logged, so
+# there was no way to tell whether this loop is the actual cause or an
+# innocent bystander converging quickly while something else is slow.
+# Logging is/force_redraw calls with timestamps below so the NEXT real
+# lid-open leaves evidence instead of another guess. Truncates each run --
+# only the most recent resume matters. Remove once #123 is root-caused.
+LOG=/home/woofi/.local/state/hypr-dpms-ensure-on.log
+mkdir -p "$(dirname "$LOG")"
+: > "$LOG"
+log() { printf '%(%H:%M:%S)T %s\n' -1 "$1" >> "$LOG"; }
+
+set -uo pipefail
+
+XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export XDG_RUNTIME_DIR
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"
+HIS=$(/bin/ls "$XDG_RUNTIME_DIR/hypr/" 2>/dev/null | head -1)
+export HYPRLAND_INSTANCE_SIGNATURE="$HIS"
+log "start his=$HIS"
+
+is_on() {
+    hyprctl monitors -j 2>/dev/null | python3 -c '
+import json, sys
+try:
+    m = json.load(sys.stdin)
+    sys.exit(0 if all(o.get("dpmsStatus") for o in m) else 1)
+except Exception:
+    sys.exit(1)
+'
+}
+
+force_redraw() {
+    log "force_redraw: dpms off"
+    hyprctl dispatch 'hl.dsp.dpms("off")' >/dev/null 2>&1
+    sleep 0.2
+    log "force_redraw: dpms on"
+    hyprctl dispatch 'hl.dsp.dpms("on")' >/dev/null 2>&1
+}
+
+force_redraw
+
+consecutive_on=0
+for i in $(seq 1 22); do
+    sleep 2
+    if is_on; then
+        consecutive_on=$((consecutive_on + 1))
+        log "check $i: on (streak $consecutive_on)"
+        if [ "$consecutive_on" -ge 2 ]; then
+            log "done: converged after ${i}x2s"
+            exit 0
+        fi
+    else
+        consecutive_on=0
+        log "check $i: OFF -- re-forcing"
+        force_redraw
+    fi
+done
+log "done: exhausted 22 retries without converging"

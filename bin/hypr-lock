@@ -32,6 +32,15 @@ if ! flock -n 9; then
     exit 0
 fi
 
+# DPMS has been observed going back off on its own within seconds of a lock
+# taking effect -- no error, no log line anywhere (hypridle, kernel, Hyprland's
+# own log all silent), display fine again only after ~a minute or a manual
+# `dpms on`. Below whatever this machine can inspect in software, so this
+# doesn't fix the cause -- it just stops the user from staring at black for a
+# minute every time. Detached: must not delay the exec below.
+setsid /home/woofi/.local/bin/hypr-dpms-ensure-on >/dev/null 2>&1 &
+disown
+
 # fd 9 stays open for the lifetime of hyprlock, so the lock is held until it
 # exits. exec replaces this shell, keeping the descriptor.
 exec hyprlock "$@"

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Runs after resume (hypridle's after_sleep_cmd). Forces a real DPMS
+# off-then-on toggle so the panel redraws -- a plain "on" is a no-op if
+# Hyprland already thinks it's on while the screen stays dark.
+#
+# Used to also restart hypridle.service here to clear a stale idle timer,
+# but that caused two real crashes by racing hypridle's own lock attempt
+# ("Seems we got yeeten" in its log). Removed once the actual cause (the
+# 480s listener dispatching dpms off) was fixed directly in hypridle.conf.
+
+systemd-run --user --scope --collect --quiet -- \
+    /home/woofi/.local/bin/hypr-dpms-ensure-on >/dev/null 2>&1 &
+disown

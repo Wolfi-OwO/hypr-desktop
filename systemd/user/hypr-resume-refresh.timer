@@ -1,0 +1,15 @@
+[Unit]
+Description=Catch up on desktop state after the machine has been away
+
+[Timer]
+# Persistent is the point: if the machine was suspended or powered off across a
+# scheduled run, this fires shortly after it comes back rather than waiting a
+# full interval. That covers the resume path even where the sleep target does
+# not reach the user session.
+OnBootSec=2min
+OnUnitActiveSec=1h
+Persistent=true
+AccuracySec=2min
+
+[Install]
+WantedBy=timers.target

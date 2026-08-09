@@ -273,3 +273,28 @@ the ACPI tables. An SSDT override that stubs out the missing `WM00` method is
 possible but was deliberately not attempted here: it touches EC
 communication, which battery, thermal and keyboard backlight all also depend
 on, and a mistake there is a much worse afternoon than this one.
+
+**Third confirmation, 2026-08-04, lid close/open specifically (not a general
+suspend):** live `journalctl -k -f` around a deliberate lid-close-then-open
+cycle caught
+
+```
+ACPI BIOS Error (bug): Could not resolve symbol [\_SB.PC00.LPCB.EC0._Q12.WM00], AE_NOT_FOUND
+ACPI Error: Aborting method \_SB.PC00.LPCB.EC0._Q12 due to previous error (AE_NOT_FOUND)
+```
+
+-- five times back to back, all at the same second, at the exact moment of
+the lid event. Same missing `WM00` symbol as `_Q44` above, different EC query
+number: this DSDT has more than one `_Qxx` handler that references the
+undefined symbol, and the lid switch specifically trips `_Q12`. Still firmware,
+still not something to retry around from Linux.
+
+Symptom as reported this time was more specific than "black for up to a
+minute": screen shows briefly, goes black again for about 30s, then recovers
+on its own. `hypr-dpms-ensure-on`'s polling window was widened from 20s to 44s
+to cover that 30s mark with margin, and it no longer trusts a single "on"
+reading (Hyprland's own dpmsStatus can say true while the panel is still
+physically dark if the fault is below Hyprland) -- it now waits for two
+consecutive "on" readings 2s apart before giving up. This is still a
+mitigation, not a fix; the SSDT-override trade-off above is unchanged and
+still not attempted for the same reason.

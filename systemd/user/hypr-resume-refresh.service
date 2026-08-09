@@ -1,0 +1,26 @@
+[Unit]
+Description=Refresh desktop state after resume
+Documentation=file:%h/.local/bin/hypr-eventd
+# NOT bound to suspend.target: those targets exist only in the SYSTEM manager,
+# never in the user manager -- `systemctl --user show suspend.target` reports
+# not-found. A WantedBy on them here silently never fires.
+#
+# Two things start this instead:
+#   /usr/lib/systemd/system-sleep/hypr-resume  runs as root on every resume and
+#                                              starts this unit in the session
+#   hypr-resume-refresh.timer                  Persistent=true, so it also
+#                                              catches up after a resume the
+#                                              hook missed, or after a cold boot
+
+[Service]
+Type=oneshot
+# Nothing executes while the machine is actually suspended -- S3 stops the CPU.
+# What this does is run the moment it comes back, so the widgets are correct
+# before the screen is readable rather than up to a full tick later.
+#
+# Weather first: it is the only one that needs the network, and after a resume
+# the link takes a moment to come back, so a failure here is normal and the
+# retained value stays on the bus until the next attempt succeeds.
+ExecStart=-%h/.local/bin/hypr-weather --force
+ExecStart=-%h/.local/bin/hypr-calendar --refresh
+TimeoutStartSec=120
