@@ -4,6 +4,22 @@ This is a personal configuration, not a distribution. Read it before running it.
 Several paths are absolute (`/home/woofi/...`) and the UI labels are German.
 Both are called out below.
 
+## The short way
+
+```sh
+git clone https://github.com/Wolfi-OwO/hypr-desktop.git
+cd hypr-desktop
+./install.sh
+```
+
+Automates everything below: packages, layout, the path/socket rewrites,
+weather geocoding, and enabling the systemd units. Safe to re-run -- anything
+it would overwrite in `$HOME` is backed up first. It does not touch your
+monitor config or the boot-time console-palette fix; both are called out at
+the end of the run because getting either wrong risks the display or the
+login path. Read on if you'd rather do it by hand, or want to know exactly
+what the script is doing.
+
 ## Dependencies
 
 ```sh

@@ -1,0 +1,14 @@
+# Copy this to weather.conf (in the same directory) and fill in your own
+# location. weather.conf itself is gitignored -- it identifies a home
+# address to within a few hundred metres, so it never leaves this machine.
+#
+# Coordinates can be looked up without an API key:
+#     curl 'https://geocoding-api.open-meteo.com/v1/search?name=<town>&count=1'
+#
+# All four are optional; without this file the widget defaults to the
+# centre of Vienna, which is a landmark rather than anybody's house.
+
+LAT=47.2692
+LON=11.4041
+TZ=Europe/Vienna
+PLACE=Innsbruck

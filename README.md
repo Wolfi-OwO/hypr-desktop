@@ -16,6 +16,18 @@ is a framework: read the comments, take the parts that apply, ignore the rest.
 
 _(add one)_
 
+## Install
+
+```sh
+git clone https://github.com/Wolfi-OwO/hypr-desktop.git
+cd hypr-desktop
+./install.sh
+```
+
+See [docs/INSTALL.md](docs/INSTALL.md) for what that does and what it
+deliberately leaves for you (your monitor config, the boot-time console-palette
+fix).
+
 ## What is here
 
 | Path | What it is |
