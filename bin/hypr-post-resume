@@ -11,3 +11,18 @@
 systemd-run --user --scope --collect --quiet -- \
     /home/woofi/.local/bin/hypr-dpms-ensure-on >/dev/null 2>&1 &
 disown
+
+# Screen and keyboard backlight both go to full on resume, unconditionally --
+# not a restore of whatever level they were at before suspend. hypridle's own
+# idle-dim listener has an on-resume too (hypridle.conf), but that one
+# restores the SAVED pre-dim level, and can fire around the same moment this
+# does: the activity that wakes the machine from suspend is the same activity
+# that ends an idle period. The sleep is deliberate -- it lets that restore
+# run first, so setting full brightness here is the last write and always
+# wins, rather than the two racing for whichever happens to land last.
+{
+    sleep 0.5
+    brightnessctl set 100% >/dev/null 2>&1
+    brightnessctl -d platform::kbd_backlight set 100% >/dev/null 2>&1
+} &
+disown
