@@ -6,7 +6,13 @@ Description=Catch up on desktop state after the machine has been away
 # scheduled run, this fires shortly after it comes back rather than waiting a
 # full interval. That covers the resume path even where the sleep target does
 # not reach the user session.
-OnBootSec=2min
+#
+# OnBootSec was 2min: at a cold boot the desktop widgets sat on stale
+# leftover-from-before-shutdown data (or the dash placeholder, before the
+# on-disk cache was read at startup) for that whole 2 minutes, when Wi-Fi is
+# normally back within a few seconds. 10s plus the service's own retries
+# gets a real reading during startup instead of long after it.
+OnBootSec=10s
 OnUnitActiveSec=1h
 Persistent=true
 AccuracySec=2min

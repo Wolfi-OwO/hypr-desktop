@@ -18,9 +18,14 @@ Type=oneshot
 # What this does is run the moment it comes back, so the widgets are correct
 # before the screen is readable rather than up to a full tick later.
 #
-# Weather first: it is the only one that needs the network, and after a resume
-# the link takes a moment to come back, so a failure here is normal and the
-# retained value stays on the bus until the next attempt succeeds.
+# Weather first: it is the only one that needs the network, and after a
+# resume or a cold boot the link takes a moment to come back. A single
+# attempt landing before Wi-Fi reconnects left the desktop widget showing
+# whatever was on disk from before, marked stale, until the NEXT scheduled
+# run -- up to an hour away (OnUnitActiveSec below). Retried up to 3 times,
+# 5s apart, so the common case (network back within a few seconds) actually
+# lands during startup instead of an hour later.
 ExecStart=-%h/.local/bin/hypr-weather --force
+ExecStart=-/usr/bin/bash -c 'sleep 5; %h/.local/bin/hypr-weather --force >/dev/null; sleep 5; %h/.local/bin/hypr-weather --force >/dev/null'
 ExecStart=-%h/.local/bin/hypr-calendar --refresh
 TimeoutStartSec=120

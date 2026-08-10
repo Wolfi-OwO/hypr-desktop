@@ -263,13 +263,30 @@ ShellRoot {
             property string battState: ""
             property string uptime: "—"
 
-            // Placeholder only -- the real place name arrives with the
-            // weather payload a moment later. A dash rather than a hardcoded
-            // village keeps the published config free of the author's home
-            // location, matching the generic coordinates in hypr-weather.
-            property var wx: ({ place: "—", temp: "—", icon: "",
-                                desc: "…", wind: "—", humidity: "—",
-                                hourly: [], daily: [], stale: false })
+            // Seeded from hypr-weather's own on-disk cache, the same file it
+            // serves from without touching the network. Without this the
+            // card sat on the dash placeholder until the next bus message --
+            // up to 15 minutes away -- every time the shell (re)started,
+            // despite a perfectly good cached reading sitting right there.
+            property var wx: {
+                try {
+                    const t = wxCache.text();
+                    if (t.length > 0) {
+                        const d = JSON.parse(t);
+                        if (d && d.place) return d;
+                    }
+                } catch (e) { /* first run, or a half-written file */ }
+                return { place: "—", temp: "—", icon: "",
+                         desc: "…", wind: "—", humidity: "—",
+                         hourly: [], daily: [], stale: false };
+            }
+
+            FileView {
+                id: wxCache
+                path: "/home/woofi/.cache/hypr/hypr-weather.json"
+                blockLoading: true
+                printErrors: false
+            }
 
             // ---- calendar ------------------------------------------------
             // calMonth is 0-based, as in JavaScript.
@@ -381,25 +398,8 @@ ShellRoot {
 
 
 
-            // The cached reading, straight off disk at startup.
-
-
-            //
-
-
-            // Same reasoning as the application list: the bus is the live path but not
-
-
-            // a guaranteed one, and a weather card that depends on the broker being up
-
-
-            // shows dashes when it is not. hypr-weather serves its own cache from
-
-
-            // ~/.cache/hypr immediately, without touching the network.
-
-
-            // Weather arrives on the shared Bus singleton. See Bus.qml.
+            // Live updates after startup arrive on the shared Bus singleton.
+            // See Bus.qml.
             Connections {
                 target: Bus
                 function onMessage(topic, d) {
