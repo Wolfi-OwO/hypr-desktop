@@ -14,15 +14,24 @@ disown
 
 # Screen and keyboard backlight both go to full on resume, unconditionally --
 # not a restore of whatever level they were at before suspend. hypridle's own
-# idle-dim listener has an on-resume too (hypridle.conf), but that one
-# restores the SAVED pre-dim level, and can fire around the same moment this
-# does: the activity that wakes the machine from suspend is the same activity
-# that ends an idle period. The sleep is deliberate -- it lets that restore
-# run first, so setting full brightness here is the last write and always
-# wins, rather than the two racing for whichever happens to land last.
-{
-    sleep 0.5
-    brightnessctl set 100% >/dev/null 2>&1
-    brightnessctl -d platform::kbd_backlight set 100% >/dev/null 2>&1
-} &
+# idle-dim listeners have on-resume handlers too (hypridle.conf) that restore
+# the SAVED pre-dim level, and they fire in the very same instant this
+# script starts, not some time later -- measured at a real lid-open:
+# `brightnessctl -r` landed the SAME SECOND as this script, restoring to 3%.
+# The sleep below outlasts that.
+#
+# First version of this fix ran its brightnessctl calls in a bare
+# `{ ... } & disown` block instead of handing them to systemd-run like the
+# dpms-ensure-on call above. Measured at the next real resume: no trace of
+# it in the journal at all, and brightness stayed at 3% -- disown keeps
+# bash's own job control from signalling it, but says nothing about
+# whatever reaps this script's process group once hypridle considers the
+# after_sleep_cmd handled. systemd-run --scope is what actually survives
+# that, proven by the dpms-ensure-on call two lines up succeeding on the
+# same resume where the bare block silently didn't.
+systemd-run --user --scope --collect --quiet -- \
+    sh -c 'sleep 0.6
+           brightnessctl set 100%
+           brightnessctl -d platform::kbd_backlight set 100%' \
+    >/dev/null 2>&1 &
 disown
