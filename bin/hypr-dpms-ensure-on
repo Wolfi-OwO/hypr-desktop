@@ -40,12 +40,60 @@ except Exception:
 '
 }
 
+# Current eDP-1 mode/position/scale, read live so the re-enable below
+# reapplies exactly what's already configured -- no hardcoded resolution
+# or scale to drift from the real thing. Printed as "mode position scale"
+# (three fields, space-separated) for `read` in force_redraw.
+#
+# This machine runs the Hyprland Lua config plugin: `hyprctl keyword
+# monitor ...` -- the normal way to reconfigure a monitor at runtime --
+# is rejected outright ("keyword can't work with non-legacy parsers. Use
+# eval."), so force_redraw goes through `hyprctl eval` calling the Lua
+# plugin's own hl.monitor() instead. Confirmed live: hl.monitor() with
+# disabled=true DOES disable the output (`hyprctl monitors all` showed it
+# missing and a FALLBACK monitor in its place); re-enabling needs
+# disabled=false EXPLICITLY passed alongside mode/position/scale -- a call
+# that only repeats the mode without it left the output disabled, grim
+# unable to find "eDP-1" at all, requiring a manual eval to recover.
+modeline() {
+    hyprctl monitors -j 2>/dev/null | python3 -c '
+import json, sys
+try:
+    for o in json.load(sys.stdin):
+        if o.get("name") == "eDP-1":
+            w, h, r, x, y, s = o["width"], o["height"], o["refreshRate"], o["x"], o["y"], o["scale"]
+            print(f"{w}x{h}@{r:.2f} {x}x{y} {s}")
+            break
+except Exception:
+    pass
+'
+}
+
 force_redraw() {
     log "force_redraw: dpms off"
     hyprctl dispatch 'hl.dsp.dpms("off")' >/dev/null 2>&1
     sleep 0.2
     log "force_redraw: dpms on"
     hyprctl dispatch 'hl.dsp.dpms("on")' >/dev/null 2>&1
+
+    # Measured 2026-08-10: this loop converged on dpmsStatus=true after one
+    # off/on toggle, twice in a row, and exited -- but the panel stayed
+    # black for another ~2 minutes until the machine was power-cycled.
+    # dpmsStatus is Hyprland's own belief, not a hardware truth signal; a
+    # DPMS blank/unblank is not always enough to un-wedge a panel the EC
+    # firmware bug (see TROUBLESHOOTING.md) left stuck. A real modeset --
+    # tearing the connector down and reinitialising it, not just toggling
+    # its power state -- is the known stronger recovery for that class of
+    # stuck panel, so it runs every time DPMS is forced, not only when
+    # dpmsStatus itself reads false.
+    read -r mode pos scale <<< "$(modeline)"
+    if [ -n "$mode" ]; then
+        log "force_redraw: modeset disable"
+        hyprctl eval 'hl.monitor({output = "eDP-1", disabled = true})' >/dev/null 2>&1
+        sleep 0.3
+        log "force_redraw: modeset $mode $pos $scale"
+        hyprctl eval "hl.monitor({output = \"eDP-1\", disabled = false, mode = \"$mode\", position = \"$pos\", scale = $scale})" >/dev/null 2>&1
+    fi
 }
 
 force_redraw
