@@ -110,29 +110,36 @@ open_editor() {
     wait $!
 }
 
+# Freeze the screen while a region is being drawn (region and copy modes
+# both select a rectangle interactively; full and window never show slurp
+# at all, so they have nothing to freeze).
+#
+# Without this, slurp draws over a LIVE desktop and grim captures only
+# after slurp exits. Two problems follow: a video, an animation or a
+# notification keeps moving under the selection rectangle, and whatever
+# changed between releasing the mouse and grim running is what actually
+# lands in the file. Every other desktop freezes the image for this --
+# GNOME, KDE, macOS -- because you are selecting a moment, not a region.
+#
+# hyprpicker -r holds a frozen copy of every output on screen; -z turns off
+# its zoom lens, which is for colour picking and only gets in the way here.
+freeze_pid=""
+freeze_screen() {
+    command -v hyprpicker >/dev/null 2>&1 || return 0
+    hyprpicker -r -z >/dev/null 2>&1 &
+    freeze_pid=$!
+    # Give it a moment to put its surface up, otherwise slurp appears first
+    # and the freeze covers the selection instead of backing it.
+    sleep 0.2
+}
+unfreeze_screen() {
+    [ -n "$freeze_pid" ] && kill "$freeze_pid" 2>/dev/null
+    freeze_pid=""
+}
+
 case "$MODE" in
     region)
-        # Freeze the screen while the region is being drawn.
-        #
-        # Without this, slurp draws over a LIVE desktop and grim captures only
-        # after slurp exits. Two problems follow: a video, an animation or a
-        # notification keeps moving under the selection rectangle, and whatever
-        # changed between releasing the mouse and grim running is what actually
-        # lands in the file. Every other desktop freezes the image for this --
-        # GNOME, KDE, macOS -- because you are selecting a moment, not a region.
-        #
-        # hyprpicker -r holds a frozen copy of every output on screen; -z turns
-        # off its zoom lens, which is for colour picking and only gets in the
-        # way here. It is killed again as soon as the region is chosen.
-        freeze_pid=""
-        if command -v hyprpicker >/dev/null 2>&1; then
-            hyprpicker -r -z >/dev/null 2>&1 &
-            freeze_pid=$!
-            # Give it a moment to put its surface up, otherwise slurp appears
-            # first and the freeze covers the selection instead of backing it.
-            sleep 0.2
-        fi
-
+        freeze_screen
         geom=$(slurp 2>/dev/null)
 
         # Capture BEFORE releasing the freeze, so what was selected is what is
@@ -141,8 +148,7 @@ case "$MODE" in
         if [ -n "$geom" ]; then
             grim -g "$geom" "$FILE" || rc=1
         fi
-
-        [ -n "$freeze_pid" ] && kill "$freeze_pid" 2>/dev/null
+        unfreeze_screen
 
         [ -n "$geom" ] || exit 0
         [ "$rc" = 0 ] || { notify "Capture failed"; exit 1; }
@@ -166,9 +172,17 @@ case "$MODE" in
         ;;
 
     copy)
-        geom=$(slurp 2>/dev/null) || exit 0
+        freeze_screen
+        geom=$(slurp 2>/dev/null)
+
+        rc=0
+        if [ -n "$geom" ]; then
+            grim -g "$geom" "$FILE" || rc=1
+        fi
+        unfreeze_screen
+
         [ -n "$geom" ] || exit 0
-        grim -g "$geom" "$FILE" || { notify "Capture failed"; exit 1; }
+        [ "$rc" = 0 ] || { notify "Capture failed"; exit 1; }
         to_clipboard "$FILE"
         notify "In die Zwischenablage kopiert" "$(basename "$FILE")"
         ;;
