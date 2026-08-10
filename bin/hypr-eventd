@@ -437,6 +437,19 @@ def uptime():
     return f"{mins} minutes"
 
 
+# power-profiles-daemon's own vocabulary ("power-saver") is not the kernel
+# ACPI platform_profile driver's vocabulary ("low-power") -- confirmed on
+# this hardware: /sys/firmware/acpi/platform_profile_choices lists
+# "low-power balanced performance", while `powerprofilesctl set power-saver`
+# is what QuickSettings.qml's UI and `powerprofilesctl` itself both use.
+# "balanced" and "performance" happen to be spelled the same in both, which
+# is exactly why only power-saver looked broken: QuickSettings compares the
+# value it just set against what this publishes, and "power-saver" v.
+# "low-power" never match. Translated below so every consumer of this bus
+# topic sees the same vocabulary the UI already speaks.
+_PLATFORM_PROFILE_TO_PPD = {"low-power": "power-saver"}
+
+
 def power_profile():
     """Active power profile, read from the kernel rather than through D-Bus.
 
@@ -446,7 +459,8 @@ def power_profile():
     Falls back to an empty string on machines that do not expose it, and the
     consumer then keeps whatever it had.
     """
-    return read("/sys/firmware/acpi/platform_profile")
+    raw = read("/sys/firmware/acpi/platform_profile")
+    return _PLATFORM_PROFILE_TO_PPD.get(raw, raw)
 
 
 def bluetooth_on():
