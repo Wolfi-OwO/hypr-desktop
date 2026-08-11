@@ -22,6 +22,21 @@ log() { printf '%(%H:%M:%S)T %s\n' -1 "$1" >> "$LOG"; }
 
 set -uo pipefail
 
+# Exactly one instance at a time. Two independent callers can both fire it on
+# the same resume -- hypr-post-resume (after_sleep_cmd) and hypr-lock both
+# launch this, and on a fast lid-close-then-open both hypridle actions can
+# land in the same second. Two copies then raced the same DPMS toggle and
+# modeset cycle against each other, and both truncated the SAME log file
+# (: > "$LOG" below), interleaving their output into a garbled, undebuggable
+# mess. Same flock idiom hypr-lock already uses for the identical problem: a
+# second caller finds the lock held and exits quietly rather than starting a
+# competing recovery run -- the screen ends up recovered either way, which is
+# all any caller wanted.
+LOCKFILE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr-dpms-ensure-on.flock"
+if exec 8>"$LOCKFILE" 2>/dev/null; then
+    flock -n 8 || exit 0   # someone else is already recovering -- exit quietly
+fi   # lock file couldn't be made: fall through and still run, unguarded
+
 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export XDG_RUNTIME_DIR
 export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"
