@@ -84,34 +84,43 @@ except Exception:
 '
 }
 
-force_redraw() {
-    log "force_redraw: dpms off"
+dpms_toggle() {
+    log "dpms_toggle: off"
     hyprctl dispatch 'hl.dsp.dpms("off")' >/dev/null 2>&1
     sleep 0.2
-    log "force_redraw: dpms on"
+    log "dpms_toggle: on"
     hyprctl dispatch 'hl.dsp.dpms("on")' >/dev/null 2>&1
+}
 
-    # Measured 2026-08-10: this loop converged on dpmsStatus=true after one
-    # off/on toggle, twice in a row, and exited -- but the panel stayed
-    # black for another ~2 minutes until the machine was power-cycled.
-    # dpmsStatus is Hyprland's own belief, not a hardware truth signal; a
-    # DPMS blank/unblank is not always enough to un-wedge a panel the EC
-    # firmware bug (see TROUBLESHOOTING.md) left stuck. A real modeset --
-    # tearing the connector down and reinitialising it, not just toggling
-    # its power state -- is the known stronger recovery for that class of
-    # stuck panel, so it runs every time DPMS is forced, not only when
-    # dpmsStatus itself reads false.
+# Measured 2026-08-10: dpms_toggle alone converged on dpmsStatus=true, twice
+# in a row, and exited -- but the panel stayed black for another ~2 minutes
+# until the machine was power-cycled. dpmsStatus is Hyprland's own belief,
+# not a hardware truth signal; a DPMS blank/unblank is not always enough to
+# un-wedge a panel the EC firmware bug (see TROUBLESHOOTING.md) left stuck.
+# A real modeset -- tearing the connector down and reinitialising it -- is
+# the known stronger recovery for that class of stuck panel.
+#
+# Measured again 2026-08-11: running this on EVERY resume, not just stuck
+# ones, is its own bug. Disabling the output makes Hyprland briefly drop
+# eDP-1 entirely -- hyprlock's lock surface, which is bound to that output,
+# falls back to a synthetic "FALLBACK" placeholder screen for the ~1s the
+# real output is gone, then creates a fresh lock surface once eDP-1
+# reappears. That fallback-then-fresh-surface cycle is exactly the "error
+# lockscreen flashes briefly" report -- a real, guaranteed, every-resume
+# regression traded for a rare one. Only escalates here now, on a retry
+# that already found dpms_toggle insufficient, not on the first attempt.
+modeset_cycle() {
     read -r mode pos scale <<< "$(modeline)"
     if [ -n "$mode" ]; then
-        log "force_redraw: modeset disable"
+        log "modeset_cycle: disable"
         hyprctl eval 'hl.monitor({output = "eDP-1", disabled = true})' >/dev/null 2>&1
         sleep 0.3
-        log "force_redraw: modeset $mode $pos $scale"
+        log "modeset_cycle: $mode $pos $scale"
         hyprctl eval "hl.monitor({output = \"eDP-1\", disabled = false, mode = \"$mode\", position = \"$pos\", scale = $scale})" >/dev/null 2>&1
     fi
 }
 
-force_redraw
+dpms_toggle
 
 consecutive_on=0
 for i in $(seq 1 22); do
@@ -125,8 +134,9 @@ for i in $(seq 1 22); do
         fi
     else
         consecutive_on=0
-        log "check $i: OFF -- re-forcing"
-        force_redraw
+        log "check $i: OFF -- escalating to modeset"
+        modeset_cycle
+        dpms_toggle
     fi
 done
 log "done: exhausted 22 retries without converging"
