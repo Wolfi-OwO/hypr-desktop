@@ -16,8 +16,6 @@
 # lid-open leaves evidence instead of another guess. Truncates each run --
 # only the most recent resume matters. Remove once #123 is root-caused.
 LOG=/home/woofi/.local/state/hypr-dpms-ensure-on.log
-mkdir -p "$(dirname "$LOG")"
-: > "$LOG"
 log() { printf '%(%H:%M:%S)T %s\n' -1 "$1" >> "$LOG"; }
 
 set -uo pipefail
@@ -26,16 +24,27 @@ set -uo pipefail
 # the same resume -- hypr-post-resume (after_sleep_cmd) and hypr-lock both
 # launch this, and on a fast lid-close-then-open both hypridle actions can
 # land in the same second. Two copies then raced the same DPMS toggle and
-# modeset cycle against each other, and both truncated the SAME log file
-# (: > "$LOG" below), interleaving their output into a garbled, undebuggable
-# mess. Same flock idiom hypr-lock already uses for the identical problem: a
-# second caller finds the lock held and exits quietly rather than starting a
-# competing recovery run -- the screen ends up recovered either way, which is
-# all any caller wanted.
+# modeset cycle against each other, and both truncated the SAME log file,
+# interleaving their output into a garbled, undebuggable mess. Same flock
+# idiom hypr-lock already uses for the identical problem: a second caller
+# finds the lock held and exits quietly rather than starting a competing
+# recovery run -- the screen ends up recovered either way, which is all any
+# caller wanted.
+#
+# Measured 2026-08-12: the truncate used to happen ABOVE this lock, so even
+# with the lock stopping both copies from doing recovery work, the SECOND
+# copy still truncated the log out from under the first, mid-write -- the
+# log for a real resume was missing its own opening lines, cut off right
+# where the second caller's truncate landed. Truncating only happens now
+# once a copy has actually won the lock, so only the copy that keeps running
+# ever touches the file.
 LOCKFILE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr-dpms-ensure-on.flock"
 if exec 8>"$LOCKFILE" 2>/dev/null; then
     flock -n 8 || exit 0   # someone else is already recovering -- exit quietly
 fi   # lock file couldn't be made: fall through and still run, unguarded
+
+mkdir -p "$(dirname "$LOG")"
+: > "$LOG"
 
 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export XDG_RUNTIME_DIR
@@ -109,6 +118,18 @@ dpms_toggle() {
 # lockscreen flashes briefly" report -- a real, guaranteed, every-resume
 # regression traded for a rare one. Only escalates here now, on a retry
 # that already found dpms_toggle insufficient, not on the first attempt.
+#
+# Measured again 2026-08-12: escalating on a SINGLE failed check was still
+# firing the same FALLBACK flash on plenty of ordinary resumes -- confirmed
+# via journalctl: a resume with no flash (12:55:49) never logged a FALLBACK
+# line and never needed a second dpms_toggle; an earlier one that did flash
+# (18:04:05) did. The panel legitimately not answering the DPMS check within
+# the first 2s (still catching up from resume) looks identical, at check 1,
+# to a genuinely stuck panel -- there was no way to tell them apart that
+# early. Below now waits for 3 consecutive misses (~6s of real, sustained
+# failure) before reaching for modeset, so an ordinary slow-to-wake panel
+# recovers via plain dpms_toggle -- no flash -- and only a panel that's
+# actually stuck escalates, just ~6s later than before.
 modeset_cycle() {
     read -r mode pos scale <<< "$(modeline)"
     if [ -n "$mode" ]; then
@@ -123,10 +144,12 @@ modeset_cycle() {
 dpms_toggle
 
 consecutive_on=0
+consecutive_off=0
 for i in $(seq 1 22); do
     sleep 2
     if is_on; then
         consecutive_on=$((consecutive_on + 1))
+        consecutive_off=0
         log "check $i: on (streak $consecutive_on)"
         if [ "$consecutive_on" -ge 2 ]; then
             log "done: converged after ${i}x2s"
@@ -134,8 +157,13 @@ for i in $(seq 1 22); do
         fi
     else
         consecutive_on=0
-        log "check $i: OFF -- escalating to modeset"
-        modeset_cycle
+        consecutive_off=$((consecutive_off + 1))
+        log "check $i: OFF (streak $consecutive_off)"
+        if [ "$consecutive_off" -ge 3 ]; then
+            log "check $i: 3 misses in a row -- escalating to modeset"
+            modeset_cycle
+            consecutive_off=0
+        fi
         dpms_toggle
     fi
 done
