@@ -14,12 +14,14 @@ ExecStart=%h/.local/bin/hypr-eventd
 Restart=always
 RestartSec=2
 
-# Reads /proc and /sys, runs wpctl, pactl, ip, iw and nmcli. It needs no write
-# access anywhere except the broker socket in the runtime directory.
+# Reads /proc and /sys, runs wpctl, pactl, ip, iw and nmcli. Writes go to the
+# broker socket in the runtime directory and to the weather cache under ~/.cache.
+# The weather cache path had to be whitelisted: ProtectHome=read-only silently
+# turned every hypr-weather fetch stale, so the widget fell back to "(alt)".
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%t
+ReadWritePaths=%t %h/.cache/hypr
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
