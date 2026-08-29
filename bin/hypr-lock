@@ -22,15 +22,44 @@
 
 set -uo pipefail
 
+# LOG (temporary, 2026-08-26): an idle-triggered lock attempt (hypridle
+# listener, pid 111267, confirmed on battery so the ADP0 guard did not
+# short-circuit it) produced ZERO output anywhere -- no hyprlock startup
+# line, no coredump, nothing in Hyprland's own log -- and the session never
+# actually locked. Checked and ruled out: this was a fresh boot (session
+# started 21:21:15, hypridle 21:21:46) with no earlier hypr-lock/hyprlock
+# invocation at all before 21:34:00, so `flock -n 9` below could not have
+# failed -- nothing had ever touched this lockfile yet. Neither documented
+# exit path in this script explains total silence, so the real cause is
+# still open. Logging every checkpoint below so the NEXT silent failure
+# leaves a timestamp instead of another guess.
+#
+# Measured 2026-08-27: a SECOND silent, zero-output invocation (pid 334144,
+# 22:22:41, also an idle-timeout listener lock on battery) happened between
+# two checks of this very log -- and this log had ALREADY thrown away the
+# evidence for it, because it truncated (`: > "$LOG"`) on every run just
+# like hypr-dpms-ensure-on's own log does on purpose. That truncate-per-run
+# choice is right for hypr-dpms-ensure-on (only the latest resume matters
+# there) but wrong here: this log exists specifically to catch a RARE,
+# intermittent silent failure, and a truncating log can only ever show the
+# most recent invocation -- exactly the one that's usually fine. Appending
+# instead, so a silent failure sandwiched between working runs stays
+# readable afterwards instead of being overwritten by the next normal lock.
+LOG=/home/woofi/.local/state/hypr-lock.log
+log() { mkdir -p "$(dirname "$LOG")"; printf '%(%H:%M:%S)T %s\n' -1 "$1" >> "$LOG"; }
+log "start pid=$$"
+
 LOCKFILE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr-lock.flock"
 
-exec 9>"$LOCKFILE" || exec hyprlock   # if the lock file cannot be made, still lock
+exec 9>"$LOCKFILE" || { log "exec 9>LOCKFILE failed, falling back to bare hyprlock"; exec hyprlock; }
 
 if ! flock -n 9; then
     # Somebody else is already locking. That is a success, not an error: the
     # screen ends up locked either way, which is all the caller wanted.
+    log "flock -n 9 failed -- another holder has the lock, exiting quietly"
     exit 0
 fi
+log "flock acquired"
 
 # DPMS has been observed going back off on its own within seconds of a lock
 # taking effect -- no error, no log line anywhere (hypridle, kernel, Hyprland's
@@ -38,9 +67,23 @@ fi
 # `dpms on`. Below whatever this machine can inspect in software, so this
 # doesn't fix the cause -- it just stops the user from staring at black for a
 # minute every time. Detached: must not delay the exec below.
-setsid /home/woofi/.local/bin/hypr-dpms-ensure-on >/dev/null 2>&1 &
+#
+# 9>&- closes OUR flock fd in that child before it backgrounds. Without it,
+# `setsid ... &` inherits fd 9 open, and flock() locks the open file
+# description, not the process -- so the recovery script (which can run for
+# up to ~44s, see its own 22x2s retry loop) would keep the lock held long
+# after hyprlock itself had exited and unlocked. A real, independently
+# confirmed defect (verified live via /proc/<pid>/fd/9 on both the recovery
+# child and hyprlock) even though it turned out NOT to explain the
+# 2026-08-26 pid-111267 silence above -- that lockfile had no prior holder
+# this boot, so this fd leak specifically cannot have been that incident's
+# cause. Fixed anyway: a leaked fd across `&` is a real bug regardless of
+# whether it fired that particular night.
+log "launching dpms-ensure-on (detached, fd 9 closed for it)"
+setsid /home/woofi/.local/bin/hypr-dpms-ensure-on >/dev/null 2>&1 9>&- &
 disown
 
 # fd 9 stays open for the lifetime of hyprlock, so the lock is held until it
 # exits. exec replaces this shell, keeping the descriptor.
+log "exec hyprlock"
 exec hyprlock "$@"

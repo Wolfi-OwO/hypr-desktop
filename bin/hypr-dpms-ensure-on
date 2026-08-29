@@ -130,7 +130,28 @@ dpms_toggle() {
 # failure) before reaching for modeset, so an ordinary slow-to-wake panel
 # recovers via plain dpms_toggle -- no flash -- and only a panel that's
 # actually stuck escalates, just ~6s later than before.
+#
+# Measured 2026-08-26, reproduced deliberately and confirmed with grim: the
+# "FALLBACK flash" above was an understatement. Disabling eDP-1 while
+# hyprlock's lock surface is bound to it doesn't just flash a placeholder --
+# Hyprland treats the lock surface as gone and drops into its lockdead
+# screen ("it looks like you locked your screen but the lockscreen ...
+# crashed", the handwritten-logo recovery screen), captured in
+# during_disabled.png/after_reenable.png. Re-enabling the output afterwards
+# does NOT clear it; the session sat on that screen until hyprlock's own
+# process exited. Escalating on 3 misses only lowered how OFTEN this fires,
+# it never stopped it from being able to fire -- and it's still owning a
+# resource (the monitor) that a locked session's lock surface owns first.
+# One owner per job: skip the modeset entirely whenever hyprlock is running,
+# same as the flock already does for two hyprlock instances. dpms_toggle
+# alone is still tried every 2s regardless (it's the thing that DOESN'T
+# touch the output's existence, and 2026-08-10 already measured it can
+# converge on its own).
 modeset_cycle() {
+    if pgrep -x hyprlock >/dev/null 2>&1; then
+        log "modeset_cycle: skipped -- hyprlock owns eDP-1 right now, disabling it would kill the lock surface (2026-08-26 lockdead repro)"
+        return 0
+    fi
     read -r mode pos scale <<< "$(modeline)"
     if [ -n "$mode" ]; then
         log "modeset_cycle: disable"

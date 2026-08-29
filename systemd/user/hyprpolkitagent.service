@@ -5,6 +5,25 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
+# hyprpolkitagent is a Qt6 Widgets binary: if it starts before Hyprland's
+# Wayland socket exists, Qt's QGuiApplicationPrivate::init() can't create a
+# platform integration (falls back to xcb, finds no X server either) and
+# calls qFatal() -- not a normal error return, a hard abort(), SIGABRT,
+# coredump every time. Measured 2026-08-26 (coredumpctl info 937/1188, same
+# boot): "could not connect to display" / "Could not load the Qt platform
+# plugin \"xcb\"" -> QMessageLogger::fatal -> abort, twice tonight at
+# 21:21:42 and 21:21:44, same shape going back to 2026-08-01 in
+# `coredumpctl list`. Restart=on-failure + RestartSec=2 below already
+# retried past it every single time (3rd attempt at 21:21:46 succeeded, by
+# which point Hyprland's socket existed) -- so it wasn't "silently never
+# running" like the graphical-session.target trap, just a needless crash
+# and a coredump on every login, sometimes more than once.
+# ExecStartPre waits for the same signal hypr-dpms-ensure-on already reads
+# to know Hyprland is up (a HYPRLAND_INSTANCE_SIGNATURE dir under
+# $XDG_RUNTIME_DIR/hypr/) instead of relying on crash-and-retry: the binary
+# now simply isn't launched until the compositor exists, so it starts clean
+# on the first try instead of aborting into a coredump while it waits.
+ExecStartPre=/usr/bin/bash -c 'for i in $(seq 1 30); do [ -n "$(ls "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr/" 2>/dev/null)" ] && exit 0; sleep 1; done; exit 1'
 ExecStart=/usr/lib/hyprpolkitagent/hyprpolkitagent
 Restart=on-failure
 RestartSec=2
