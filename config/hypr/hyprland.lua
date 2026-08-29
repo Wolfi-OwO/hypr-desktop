@@ -174,13 +174,17 @@ hl.env("PATH", "/home/woofi/.local/bin:/home/woofi/bin:/usr/local/bin:/usr/bin:/
 -----------------------
 ---- LOOK AND FEEL ----
 -----------------------
+-- Named so the gnome-like-stacking rule further down can size floating
+-- windows to account for it -- see the comment there for why that matters.
+local BORDER_SIZE = 1
+
 hl.config({
     general = {
         -- No gaps: you wanted the padding around windows gone.
         gaps_in  = 0,
         gaps_out = 0,
 
-        border_size = 1,
+        border_size = BORDER_SIZE,
 
         col = {
             -- Magenta -> sky blue: the two colours the femboy and trans flags
@@ -193,6 +197,22 @@ hl.config({
         allow_tearing    = false,
 
         layout = "dwindle",
+
+        -- Floating windows snap to screen edges and other windows when
+        -- dragged (Hyprland 0.56).
+        snap = {
+            enabled        = true,
+            window_gap     = 10,
+            monitor_gap    = 0,
+            border_overlap = false,
+        },
+
+        -- Static workspaces: exactly 4, no dynamic creation, no wrap-around.
+        -- This matches the workspace rules below (persistent 1..4) and all
+        -- keybinds which clamp to [1,4]. Without this Hyprland creates new
+        -- workspaces on demand (the "6 workspaces" you saw).
+        dynamic_workspaces = false,
+        num_workspaces     = 4,
     },
 
     decoration = {
@@ -430,8 +450,12 @@ hl.config({
     },
 })
 
--- 3-finger horizontal swipe switches workspaces, like GNOME.
-hl.gesture({ fingers = 3, direction = "horizontal", action = "workspace" })
+-- 3-finger horizontal swipe switches workspaces, like GNOME, but bounded to 1..4.
+-- Hyprland's built-in gesture action="workspace" does not respect
+-- num_workspaces/dynamic_workspaces bounds and wraps past workspace 4.
+-- Override it with explicit gestures using the bounded WS_NEXT/WS_PREV commands.
+hl.gesture({ fingers = 3, direction = "left",  action = hl.dsp.exec_cmd(WS_PREV) })
+hl.gesture({ fingers = 3, direction = "right", action = hl.dsp.exec_cmd(WS_NEXT) })
 
 
 ---------------------
@@ -439,28 +463,47 @@ hl.gesture({ fingers = 3, direction = "horizontal", action = "workspace" })
 ---------------------
 local mainMod = "SUPER"
 
+-- Bounded next/previous workspace: 1..4 only, no wrap-around. "e+1"/"e-1"
+-- (next/previous EXISTING workspace) was used here before; confirmed live
+-- via `hyprctl dispatch` that it WRAPS -- from workspace 4, "e+1" landed
+-- back on workspace 1, and from workspace 1, "e-1" landed on workspace 4.
+-- That's the "can't go past workspace 4 right, even though it's supposed to
+-- be the last one" report: pressing "next" on the last workspace silently
+-- teleported back to the first instead of staying put. GNOME's own static
+-- 4-workspace model (the one this whole file imitates, see WORKSPACES
+-- below) does NOT wrap -- the last workspace really is the last one, and
+-- "next" there does nothing. Reading the active workspace and clamping to
+-- [1,4] in shell (rather than trusting Hyprland's own relative addressing,
+-- which has no non-wrapping mode) reproduces that exactly -- confirmed live
+-- for all four directions (next from 4 stays at 4, prev from 1 stays at 1,
+-- next from 2 goes to 3, prev from 3 goes to 2).
+local WS_NEXT = [[w=$(hyprctl activeworkspace -j | jq '.id'); [ "$w" -lt 4 ] && w=$((w+1)); hyprctl dispatch focusworkspace $w]]
+local WS_PREV = [[w=$(hyprctl activeworkspace -j | jq '.id'); [ "$w" -gt 1 ] && w=$((w-1)); hyprctl dispatch focusworkspace $w]]
+local WS_MOVE_NEXT = [[w=$(hyprctl activeworkspace -j | jq '.id'); [ "$w" -lt 4 ] && w=$((w+1)); hyprctl dispatch movetoworkspace $w]]
+local WS_MOVE_PREV = [[w=$(hyprctl activeworkspace -j | jq '.id'); [ "$w" -gt 1 ] && w=$((w-1)); hyprctl dispatch movetoworkspace $w]]
+
 -- ---- Workspace switching: STRG+ALT+Left/Right (your GNOME binding) ------
-hl.bind("CTRL + ALT + left",  hl.dsp.focus({ workspace = "e-1" }))
-hl.bind("CTRL + ALT + right", hl.dsp.focus({ workspace = "e+1" }))
-hl.bind("CTRL + ALT + up",    hl.dsp.focus({ workspace = "e-1" }))
-hl.bind("CTRL + ALT + down",  hl.dsp.focus({ workspace = "e+1" }))
+hl.bind("CTRL + ALT + left",  hl.dsp.exec_cmd(WS_PREV))
+hl.bind("CTRL + ALT + right", hl.dsp.exec_cmd(WS_NEXT))
+hl.bind("CTRL + ALT + up",    hl.dsp.exec_cmd(WS_PREV))
+hl.bind("CTRL + ALT + down",  hl.dsp.exec_cmd(WS_NEXT))
 
 -- GNOME's alternate bindings for the same action
-hl.bind(mainMod .. " + Page_Up",     hl.dsp.focus({ workspace = "e-1" }))
-hl.bind(mainMod .. " + Page_Down",   hl.dsp.focus({ workspace = "e+1" }))
-hl.bind(mainMod .. " + ALT + left",  hl.dsp.focus({ workspace = "e-1" }))
-hl.bind(mainMod .. " + ALT + right", hl.dsp.focus({ workspace = "e+1" }))
+hl.bind(mainMod .. " + Page_Up",     hl.dsp.exec_cmd(WS_PREV))
+hl.bind(mainMod .. " + Page_Down",   hl.dsp.exec_cmd(WS_NEXT))
+hl.bind(mainMod .. " + ALT + left",  hl.dsp.exec_cmd(WS_PREV))
+hl.bind(mainMod .. " + ALT + right", hl.dsp.exec_cmd(WS_NEXT))
 hl.bind(mainMod .. " + Home",        hl.dsp.focus({ workspace = 1 }))
 hl.bind(mainMod .. " + End",         hl.dsp.focus({ workspace = 4 }))
 
 -- ---- Move window to workspace: STRG+SHIFT+ALT+Left/Right ----------------
-hl.bind("CTRL + SHIFT + ALT + left",  hl.dsp.window.move({ workspace = "e-1" }))
-hl.bind("CTRL + SHIFT + ALT + right", hl.dsp.window.move({ workspace = "e+1" }))
-hl.bind("CTRL + SHIFT + ALT + up",    hl.dsp.window.move({ workspace = "e-1" }))
-hl.bind("CTRL + SHIFT + ALT + down",  hl.dsp.window.move({ workspace = "e+1" }))
+hl.bind("CTRL + SHIFT + ALT + left",  hl.dsp.exec_cmd(WS_MOVE_PREV))
+hl.bind("CTRL + SHIFT + ALT + right", hl.dsp.exec_cmd(WS_MOVE_NEXT))
+hl.bind("CTRL + SHIFT + ALT + up",    hl.dsp.exec_cmd(WS_MOVE_PREV))
+hl.bind("CTRL + SHIFT + ALT + down",  hl.dsp.exec_cmd(WS_MOVE_NEXT))
 
-hl.bind(mainMod .. " + SHIFT + Page_Up",   hl.dsp.window.move({ workspace = "e-1" }))
-hl.bind(mainMod .. " + SHIFT + Page_Down", hl.dsp.window.move({ workspace = "e+1" }))
+hl.bind(mainMod .. " + SHIFT + Page_Up",   hl.dsp.exec_cmd(WS_MOVE_PREV))
+hl.bind(mainMod .. " + SHIFT + Page_Down", hl.dsp.exec_cmd(WS_MOVE_NEXT))
 hl.bind(mainMod .. " + SHIFT + Home",      hl.dsp.window.move({ workspace = 1 }))
 hl.bind(mainMod .. " + SHIFT + End",       hl.dsp.window.move({ workspace = 4 }))
 
@@ -515,7 +558,25 @@ hl.bind(mainMod .. " + F", hl.dsp.window.fullscreen({ mode = "fullscreen" }))
 
 -- GNOME "minimize" (SUPER+H). Hyprland has no minimise, so stash the window
 -- on a hidden special workspace; SUPER+SHIFT+H reveals the stash.
-hl.bind(mainMod .. " + H",           hl.dsp.window.move({ workspace = "special:minimized", silent = true }))
+--
+-- A plain `window.move({ workspace = "special:minimized", silent = true })`
+-- silently does nothing if that special workspace happens to already be
+-- toggled ON for the monitor (SUPER+SHIFT+H opened it and nobody closed it
+-- again, say) -- "silent" only means "don't switch focus to it", the window
+-- still lands inside a workspace that's currently being DISPLAYED, so it
+-- stays fully visible. That's the "minimize freezes for a moment [the
+-- workspace-move animation], then nothing happens" report: the move
+-- genuinely happened, it just moved the window into a stash that was
+-- already open. Confirmed live via `hyprctl monitors -j`'s
+-- `specialWorkspace` field before fixing this. Now: move it in, then check
+-- whether that left the special workspace visible on any monitor, and if
+-- so close it -- minimize should always make the window disappear, same as
+-- every other window manager, regardless of what SUPER+SHIFT+H was left at.
+hl.bind(mainMod .. " + H", hl.dsp.exec_cmd(
+    [[hyprctl dispatch 'hl.dsp.window.move({ workspace = "special:minimized", silent = true })' && ]] ..
+    [[hyprctl monitors -j | jq -e 'any(.[]; .specialWorkspace.name == "special:minimized")' >/dev/null && ]] ..
+    [[hyprctl dispatch 'hl.dsp.workspace.toggle_special("minimized")']]
+))
 hl.bind(mainMod .. " + SHIFT + H",   hl.dsp.workspace.toggle_special("minimized"))
 
 -- Move window between monitors: SUPER+SHIFT+arrows (GNOME move-to-monitor)
@@ -579,9 +640,10 @@ hl.bind(mainMod .. " + SHIFT + grave",   hl.dsp.window.move({ workspace = "speci
 -- instantly with no confirmation.
 hl.bind(mainMod .. " + SHIFT + M", hl.dsp.exit())
 
--- Scroll through workspaces
-hl.bind(mainMod .. " + mouse_down", hl.dsp.focus({ workspace = "e+1" }))
-hl.bind(mainMod .. " + mouse_up",   hl.dsp.focus({ workspace = "e-1" }))
+-- Scroll through workspaces -- same bounded 1..4, no wrap; see WS_NEXT/
+-- WS_PREV above.
+hl.bind(mainMod .. " + mouse_down", hl.dsp.exec_cmd(WS_NEXT))
+hl.bind(mainMod .. " + mouse_up",   hl.dsp.exec_cmd(WS_PREV))
 
 -- Mouse drag to move / resize
 hl.bind(mainMod .. " + mouse:272", hl.dsp.window.drag(),   { mouse = true })
@@ -645,13 +707,21 @@ hl.bind("XF86AudioPrev",  hl.dsp.exec_cmd("qs ipc call media previous"),  { lock
 --------------------------------
 ---- WINDOWS AND WORKSPACES ----
 --------------------------------
--- Ignore maximize requests from all apps.
-hl.window_rule({
-    name           = "suppress-maximize-events",
-    match          = { class = ".*" },
-    suppress_event = "maximize",
-})
-
+-- There USED to be a blanket "suppress-maximize-events" rule here
+-- (suppress_event = "maximize", match class = ".*"). Removed: Hyprland
+-- cannot tell an app's own maximize request apart by WHO sent it, only that
+-- one arrived -- so the same suppression that (undocumented, no measurement
+-- recorded for what it was protecting against) may have stopped an app
+-- self-maximizing on launch also silently ate every double-click on an
+-- app's own titlebar (GTK/Qt CSD titlebars send the identical
+-- xdg_toplevel.set_maximized request the compositor keybind never touches).
+-- That is what made "double-click the titlebar to maximize" and "restore"
+-- look broken -- the request left the app and never came back. The
+-- gnome-like-stacking rule below still forces every window's OPEN geometry
+-- regardless, so removing this does not reintroduce the original
+-- size="92% 92%" bug; if some app is found to fight its own launch geometry
+-- again, re-add the suppression scoped to that one class, not every window.
+--
 -- GNOME-like window behaviour: every window floats and opens MAXIMISED, so
 -- windows stack behind each other instead of tiling side by side. Alt+Tab
 -- cycles and raises, exactly like GNOME.
@@ -666,7 +736,7 @@ hl.window_rule({
 -- parser but do NOTHING (windows fell back to their own default, 989x801 for
 -- kitty — about 72 columns, which is why btop and nmtui complained
 -- "Terminal size too small: Width = 73"). Explicit pixels do work.
-local BAR_H = 36
+local BAR_H = 40   -- Bar.qml's barH; measured there, not re-derived here
 local FILL_W, FILL_H = 1440, 900 - BAR_H   -- fallback: eDP-1 at scale 2
 do
     local ok, mons = pcall(hl.get_monitors)
@@ -684,12 +754,49 @@ end
 -- (code/brave/nautilus/discord all run natively), so they size themselves
 -- itself naturally and grow with its results, exactly as it did on GNOME.
 -- Forcing a size on it made it either a huge empty box or too small.
+--
+-- no_shadow/border_size = 0: a real maximized window (Windows, GNOME, any of
+-- them) is flush with the screen -- no border, no drop shadow, because there
+-- is nothing behind its edge left to shadow onto. Every window here is
+-- ALWAYS in that state (that's the whole point of gnome-like-stacking), so
+-- the global border/shadow from the decoration block above only ever showed
+-- up as a soft, semi-transparent halo around windows that never actually
+-- needed one -- reported as "maximize gets a blurred border, not like
+-- Windows". With border_size = 0 there is also no border-vs-content-box
+-- inset to compensate for any more: size/move go back to the plain
+-- FILL_W/FILL_H/BAR_H fill, no BORDER_SIZE arithmetic, because a real
+-- maximize toggle (SUPER+Up) computes the SAME zero-border geometry for
+-- this window now -- confirmed live, toggling maximize on a window under
+-- this rule after the change produced zero pixels of movement.
+-- (BORDER_SIZE itself stays as the general.border_size default for windows
+-- this rule doesn't match -- dialogs, rofi, the screenshot editor -- where a
+-- border is exactly what tells them apart from the maximized stack.)
 hl.window_rule({
-    name  = "gnome-like-stacking",
-    match = { class = ".*", xwayland = false },
-    float = true,
-    size  = FILL_W .. " " .. FILL_H,
-    move  = "0 " .. BAR_H,
+    name       = "gnome-like-stacking",
+    match      = { class = ".*", xwayland = false },
+    float      = true,
+    size       = FILL_W .. " " .. FILL_H,
+    move       = "0 " .. BAR_H,
+    no_shadow  = true,
+    border_size = 0,
+})
+
+-- XWayland clients still need to float, just not with a forced size (see the
+-- comment above -- that broke a real app). Without this they fall through to
+-- Hyprland's default TILED layout, which is what made F11 look broken: a
+-- floating window restores to its own exact saved position/size when it
+-- leaves fullscreen (proven live: toggling `hl.dsp.window.fullscreen` on a
+-- floating client round-trips its workspace, position and size exactly), but
+-- a TILED window has no such slot to return to -- leaving fullscreen just
+-- re-inserts it wherever the dwindle layout currently has room, which reads
+-- as "forgot where it was" and, once other windows had opened or closed
+-- while it was away, sometimes on a different workspace entirely.
+hl.window_rule({
+    name        = "gnome-like-stacking-xwayland",
+    match       = { class = ".*", xwayland = true },
+    float       = true,
+    no_shadow   = true,
+    border_size = 0,
 })
 
 -- Fix XWayland drag-and-drop cursor glitches.

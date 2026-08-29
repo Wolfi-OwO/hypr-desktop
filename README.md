@@ -12,10 +12,6 @@ Everything here runs on one machine — an Arch laptop with a 2880x1800 display 
 scale 2. It is published because the reasoning is written down, not because it
 is a framework: read the comments, take the parts that apply, ignore the rest.
 
-## Screenshot
-
-_(add one)_
-
 ## Install
 
 ```sh

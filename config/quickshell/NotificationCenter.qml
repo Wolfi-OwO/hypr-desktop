@@ -81,46 +81,58 @@ Scope {
 
     // Open whatever sent a notification, then close the centre.
     //
-    // Three routes, most specific first:
+    // USED to be: invoke the sender's own "default"/single action if it has
+    // one, and only fall back to hypr-launch (raise-or-start the app) for
+    // senders that offer no actions at all. That's why "click brings me to
+    // the app + workspace" kept not working -- most senders DO register a
+    // default action, so hypr-launch (the only route that actually asks
+    // Hyprland to focus the window and switch workspace) never ran at all.
+    // Invoking a notification action tells the SENDING app "handle this
+    // click" over its own private channel (D-Bus ActionInvoked); on this
+    // stack nothing requires that channel to also carry a window-activation
+    // token, and in practice it usually doesn't -- the app may open the
+    // right conversation internally without ever asking the compositor to
+    // raise or focus its window.
     //
-    //  1. The notification's own "default" action. This is what the desktop
-    //     notification spec means by activating a notification, and it is the
-    //     only route that lands somewhere useful -- a chat client opens the
-    //     conversation the message came from, not just the application.
-    //  2. Any other action, if the sender gave exactly one. Some applications
-    //     name their single action something other than "default".
-    //  3. desktopEntry, launched through hypr-launch, which raises an already
-    //     running instance instead of starting a second copy. This is the
-    //     fallback for senders that offer no actions at all.
+    // Now both happen, unconditionally, every click:
+    //  1. hypr-launch, matched against desktopEntry (preferred) or appName
+    //     (fallback -- fine here specifically because raising only touches a
+    //     window that's already open; it can't start the WRONG app, unlike
+    //     guessing a whole launch command from free-text appName). This is
+    //     the part that actually satisfies "bring me to the app +
+    //     workspace" -- it dispatches hl.dsp.focus + bring_to_top for real.
+    //  2. The sender's own default/single action, if it has one, so
+    //     app-specific deep-linking (open THIS conversation, not just the
+    //     app) still happens same as before.
     //
-    // If none of the three apply there is genuinely nothing to open, and the
-    // double click does nothing rather than guessing from appName -- appName is
-    // free text and matching it against .desktop files launches the wrong
-    // program often enough to be worse than doing nothing.
+    // If hypr-launch finds no window open for that needle, it falls through
+    // to its own EXEC argument -- gtk-launch for a real desktopEntry, or a
+    // harmless shell no-op when only appName is available, so an
+    // appName-only notification can still raise an ALREADY-open window
+    // without risking starting the wrong program from guessed free text.
     function activate(n) {
         if (!n) return;
 
+        const entry = (n.desktopEntry || "").replace(/\.desktop$/, "");
+        const needle = entry !== "" ? entry : (n.appName || "");
+        if (needle !== "") {
+            const exec = entry !== "" ? "gtk-launch " + entry : ":";
+            Quickshell.execDetached(["sh", "-c",
+                "/home/woofi/.local/bin/hypr-launch '" + needle + "' " + exec]);
+        }
+
         const acts = n.actions || [];
+        let invoked = false;
         for (let i = 0; i < acts.length; i++) {
             if (acts[i].identifier === "default") {
                 acts[i].invoke();
-                nc.panelOpen = false;
-                return;
+                invoked = true;
+                break;
             }
         }
-        if (acts.length === 1) {
-            acts[0].invoke();
-            nc.panelOpen = false;
-            return;
-        }
+        if (!invoked && acts.length === 1) acts[0].invoke();
 
-        const entry = (n.desktopEntry || "").replace(/\.desktop$/, "");
-        if (entry !== "") {
-            Quickshell.execDetached(["sh", "-c",
-                "/home/woofi/.local/bin/hypr-launch '" + entry
-                + "' gtk-launch " + entry]);
-            nc.panelOpen = false;
-        }
+        nc.panelOpen = false;
     }
 
     // ---- Palette (Catppuccin Mocha) ---------------------------------------
@@ -289,7 +301,7 @@ Scope {
                     height: Math.max(74, toastBody.implicitHeight + 26)
                     radius: 18
 
-                    // Same hover and double-click behaviour as the rows in the
+                    // Same hover and click behaviour as the rows in the
                     // centre: a toast is the first place you see a notification,
                     // so it should be the first place you can act on it.
                     scale: toastHov.hovered ? 1.015 : 1.0
@@ -302,7 +314,7 @@ Scope {
 
                     MouseArea {
                         anchors.fill: parent
-                        onDoubleClicked: nc.activate(toastCard.modelData)
+                        onClicked: nc.activate(toastCard.modelData)
                     }
                     // The accent colour is the card's BASE surface. The
                     // previous approach -- a separate bar on the left -- stuck
@@ -441,13 +453,6 @@ Scope {
                         }
                     }
 
-                    // Clicking the toast opens the centre -- the same one the
-                    // bell button opens. Dismissing is what the red X at the
-                    // top right is for.
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: nc.panelOpen = true
-                    }
                 }
             }
         }
@@ -710,18 +715,22 @@ Scope {
                                     }
                                 }
 
-                                // Double click opens whatever sent the
+                                // A single click opens whatever sent the
                                 // notification; the red X deletes it.
                                 //
-                                // A single click used to dismiss, which is why
-                                // this is a doubleClick: the first click of a
-                                // double would have destroyed the delegate
-                                // before the second arrived, so the two cannot
-                                // coexist. Dismissing already has its own
-                                // dedicated button, so nothing is lost.
+                                // Used to be onDoubleClicked, left over from a
+                                // design where a single click dismissed the
+                                // card (so the first click of a double-click
+                                // would have destroyed the delegate before the
+                                // second arrived). That dismiss-on-click
+                                // behaviour is gone -- the X button owns
+                                // dismissal now -- but the double-click
+                                // requirement stayed, so a normal single click
+                                // (what every other notification centre uses)
+                                // silently did nothing.
                                 MouseArea {
                                     anchors.fill: parent
-                                    onDoubleClicked: nc.activate(notifCard.modelData)
+                                    onClicked: nc.activate(notifCard.modelData)
                                 }
                             }
                         }

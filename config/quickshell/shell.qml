@@ -40,6 +40,10 @@ ShellRoot {
     // Alt+Tab switcher with an overlay.
     AltTab { id: altTab }
 
+    // Makes an app's own titlebar minimize button do something -- Hyprland
+    // has no event for that request at all, see MinimizeBridge.qml's header.
+    MinimizeBridge { id: minimizeBridge }
+
     // Colour temperature schedule editor. Its own component rather than an
     // addition to QuickSettings.qml -- see the header of SunsetSchedule.qml.
     SunsetSchedule { id: sunsetSchedule }

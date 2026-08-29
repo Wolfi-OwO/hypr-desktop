@@ -123,16 +123,38 @@ Scope {
     function run(cmd) { Quickshell.execDetached(["sh", "-c", cmd]); }
 
     function step(dir) {
+        stuckGuard.restart();
         if (!at.shown) {
             at.shown = true;
             at.index = 0;
             at.subIndex = -1;
+            // Drop the previous session's tiles rather than leaving them
+            // displayed while the fresh list loads -- Alt+Tab is bound
+            // through Hyprland's `bind` (fires once per keypress, not held),
+            // so each press re-runs `hyprctl clients | jq`. Leaving the last
+            // session's groups around let that stale list render, and its
+            // group order/positions rarely match the fresh one -- THAT was
+            // the "twitches / jumps over Brave" report: a flash of the wrong
+            // tile before the real data replaced it a few ms later.
+            at.groups = [];
             at.pendingStep = dir;   // applied in onStreamFinished
             load.running = true;
-            stuckGuard.restart();
             return;
         }
-        stuckGuard.restart();
+        if (load.running) {
+            // The fetch from opening the overlay hasn't come back yet.
+            // Pressing Tab again in this window used to either do nothing
+            // (groups still empty) or step through the just-cleared/stale
+            // array, corrupting `index` before onStreamFinished had a
+            // chance to apply pendingStep to it -- a second real keypress
+            // could get silently dropped or land on the wrong tile
+            // depending on how fast `hyprctl clients | jq` happened to run
+            // (a whole process pipeline, not free) relative to it. Queue it
+            // instead; it's applied together with the opening step once the
+            // fresh list is in.
+            at.pendingStep += dir;
+            return;
+        }
         if (at.groups.length === 0) return;
         at.index = ((at.index + dir) % at.groups.length + at.groups.length) % at.groups.length;
         at.subIndex = -1;
