@@ -288,6 +288,20 @@ Scope {
         anchors { top: true; left: true; right: true }
         implicitHeight: Math.max(1, toastCol.implicitHeight + 56)
 
+        // Input clipped to the toast column, because the panel is far bigger
+        // than the toasts drawn in it. Anchoring left AND right is what lets a
+        // toast be centred, but it also made the layer surface 1440x130 at 0,0
+        // (measured with `hyprctl layers` while a toast was up) -- a band
+        // across the entire top of the screen, sitting on the overlay layer
+        // ON TOP of the 1440x40 bar. A layer surface takes input over its
+        // whole extent unless masked, so the transparent remainder ate every
+        // click: with a toast up, clicking logical (200,110) over a window
+        // there did NOT move focus, while the same click at (200,300), just
+        // below the band, did. The bar was unreachable for the toast's full
+        // 10 s lifetime. The column is exactly the 440 px of drawn card, and
+        // the close button sits inside it, so nothing clickable is lost.
+        mask: Region { item: toastCol }
+
         Column {
             id: toastCol
             anchors.horizontalCenter: parent.horizontalCenter

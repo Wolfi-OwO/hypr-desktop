@@ -97,6 +97,16 @@ Scope {
 
         anchors { top: true; left: true; right: true; bottom: true }
 
+        // Takes no input at all. This overlay is decorative -- there is not a
+        // single MouseArea, TapHandler or HoverHandler in this file -- yet it
+        // anchors to all four edges, so the layer surface measured 1440x900 at
+        // 0,0 (`hyprctl layers`): the whole output. Unmasked, it swallowed
+        // every click on the screen for the ~4 s it stayed up. Reproduced with
+        // `qs ipc call charge test 63 75`: a click over another window left
+        // focus on the previously active one. An empty region passes
+        // everything through while the card still draws normally.
+        mask: Region {}
+
         Rectangle {
             id: card
             readonly property int animMs: 380
