@@ -298,3 +298,51 @@ physically dark if the fault is below Hyprland) -- it now waits for two
 consecutive "on" readings 2s apart before giving up. This is still a
 mitigation, not a fix; the SSDT-override trade-off above is unchanged and
 still not attempted for the same reason.
+
+## BetterDiscord stops working after Discord updates itself
+
+Discord on Linux self-updates independently of pacman: it downloads a fresh
+`app-<version>` directory under `~/.config/discord/` and launches from there,
+leaving the pacman-tracked version's directory behind. `bdcli discover`
+showed the mismatch directly:
+
+```
+pacman -Qs discord            # local/discord 1:1.0.155-1
+ps -eo comm,args | grep discord   # running from .../app-1.0.156/Discord
+bdcli discover                # BD INJECTED: no, for the live 1.0.156 path
+```
+
+BetterDiscord's injection lives inside the specific `app-<version>/resources`
+directory it was installed into. A self-update never carries that over, so
+every self-update is functionally a fresh, unpatched Discord install as far
+as BD is concerned -- unrelated to BD's own "survives Discord's updates"
+changelog, which is about BD's plugin/asar loading surviving Discord's
+in-app JS hot-patches, not about surviving Discord replacing its own
+directory on disk.
+
+Fix: re-run the installer against whatever the currently running version is.
+`bdcli install` auto-detects the live install (`--channel stable` is enough
+here; there is only one channel installed) and is safe to re-run any number
+of times -- `install` is an alias for `reinstall`.
+
+```sh
+bdcli install --channel stable
+```
+
+Confirmed injected, not just present on disk, by screenshotting the
+restarted client (`grim` on the window's logical geometry from
+`hyprctl clients -j`) and reading the result: BD's own changelog modal and
+its "Addon Updater" plugin toast were both visible and listing the user's
+actual installed plugins.
+
+`bdcli` is the one tool to use for this. `betterdiscord-installer-bin` (the
+GUI installer) is also installed and does the same job through a window
+instead of a terminal -- redundant with `bdcli` for this machine's actual
+(headless-scriptable) usage, kept installed but not the one to reach for.
+
+No watcher or systemd unit for this: Discord does not self-update often
+enough to justify a background process polling for it, and `bdcli install`
+being a safe, idempotent single command is already the smallest thing that
+holds. ponytail: manual re-run, no auto-detection of Discord's own
+self-update -- upgrade to a small path-watcher only if this is still
+happening more than once every few weeks.
