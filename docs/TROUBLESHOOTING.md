@@ -346,3 +346,52 @@ being a safe, idempotent single command is already the smallest thing that
 holds. ponytail: manual re-run, no auto-detection of Discord's own
 self-update -- upgrade to a small path-watcher only if this is still
 happening more than once every few weeks.
+
+## Getting a Windows-style UI font into Discord
+
+Wanted: Discord's UI in the same font family as Windows' UI. The literal
+answer is Segoe UI, but Segoe UI is proprietary and this machine has neither
+Windows nor an NTFS partition to pull it from (`lsblk`: one ext4 root, one
+vfat `/boot`, nothing else). Chosen instead: **Selawik**
+(`aur/ttf-selawik`), Microsoft's own OFL-licensed, metric-compatible
+Segoe UI substitute -- legally clean to reference from a public repo, unlike
+the real thing.
+
+Deliberately done through BetterDiscord's custom CSS, not a fontconfig
+alias for `gg sans`: one owner for what Discord's font is, not two
+mechanisms that could disagree. `config/betterdiscord/custom.css` (this
+repo) is that one owner; copy it to
+`~/.config/BetterDiscord/data/<channel>/custom.css` (`stable` for the
+official release channel) and BD's live-reload picks it up immediately,
+no Discord restart needed for a CSS-only change (a restart IS needed after
+first installing the font itself, since an already-running Electron process
+does not see fontconfig changes: `fc-cache -f`, then quit and relaunch
+Discord).
+
+The two variables it sets, `--font-primary` and `--font-headline`, are not
+copied from memory or an old guide -- they were read directly off the live
+1.0.156 client via Chrome DevTools Protocol (`Discord --remote-debugging-port=9222`,
+then `Runtime.evaluate` over the websocket) by dumping every `--font*`
+custom property Discord's own stylesheet sets on `:root`. `--font-code` is
+deliberately left untouched: a proportional font in code blocks reads worse,
+not better. The clan/marketing display fonts (`--font-clan-*`,
+`--font-display-marketing*`) are also left alone -- decorative fonts for
+specific features, not general UI text.
+
+Checked for a theme conflict before assuming none: this install already had
+two BD themes (`DiscordPlus.theme.css`, `NewAkameGaKill.theme.css`), and a
+full theme commonly sets its own font variables, which would have needed
+solving without taking the theme away from the user. Neither theme sets any
+`--font-*` variable (grepped directly), and neither is currently enabled
+(`themes.json`) besides, so there is no live conflict -- but the override
+still carries `!important` as a cheap hedge against a future theme that does
+set these, since BD loads custom.css after theme CSS and same-specificity,
+later-wins is a load-order bet rather than a guarantee.
+
+Verified in the running client, not just on disk: `getComputedStyle` on
+`document.body` and on a real heading element both returned a
+`Selawik, "gg sans", ...` stack (over CDP), and a `grim` screenshot of the
+window (logical geometry from `hyprctl clients -j`, scale 2 -- physical
+pixels for grim, logical for hyprctl) showed the visibly different
+letterforms. Re-checked after a full quit and cold relaunch (not just a
+`Ctrl+R` reload) to rule out a reload-only fix that would not survive.

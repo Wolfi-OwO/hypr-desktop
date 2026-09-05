@@ -1,0 +1,29 @@
+/* Windows-style UI font for Discord: Selawik, an OFL-licensed, metric-
+ * compatible substitute for Segoe UI (the "real" Segoe UI is proprietary
+ * and this machine has no Windows/NTFS to source it from -- see
+ * docs/TROUBLESHOOTING.md for the reasoning).
+ *
+ * --font-primary and --font-headline are the two variables Discord's own
+ * stylesheet actually sets on :root in the live 1.0.156 client (read via
+ * `getComputedStyle`/CDP, not assumed from memory) -- they cover general UI
+ * text and display/headline text respectively. --font-code is deliberately
+ * left alone: a proportional font in code blocks reads worse, not better.
+ * --font-clan-* and --font-display-marketing* are decorative fonts for
+ * specific Discord features (clans, marketing pages), not general UI text,
+ * so they are out of scope here too.
+ */
+/* !important: neither of the two installed themes (Discord+, New Akame Ga
+ * Kill!) sets these variables today -- checked their CSS directly, neither
+ * mentions --font-primary/--font-headline/gg sans at all, and both are
+ * currently disabled in themes.json besides. Kept anyway as a cheap
+ * safeguard for if a theme that DOES set them gets enabled later; BD loads
+ * custom.css after theme CSS, so plain :root would likely still win on load
+ * order alone, but !important removes the "likely".
+ * ponytail: this is the whole defense -- if a future theme also reaches for
+ * !important on these same variables, it becomes a load-order coin flip
+ * again. Re-check with getComputedStyle then; not solved preemptively here.
+ */
+:root {
+    --font-primary: "Selawik", "gg sans", "Noto Sans", "Helvetica Neue", Helvetica, Arial, sans-serif !important;
+    --font-headline: "Selawik", "gg sans", "Noto Sans", "Helvetica Neue", Helvetica, Arial, sans-serif !important;
+}
