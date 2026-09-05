@@ -292,6 +292,43 @@ ShellRoot {
                 printErrors: false
             }
 
+            // ---- photo stack -----------------------------------------------
+            // Populated from whatever is actually on disk rather than three
+            // hardcoded filenames, so a fresh checkout shows no card instead
+            // of three broken-image icons and someone else's caption.
+            property var galleryFiles: []
+
+            FileView {
+                id: galleryCaptionFile
+                path: "/home/woofi/.config/hypr/gallery-caption.txt"
+                blockLoading: true
+                printErrors: false
+            }
+            readonly property string galleryCaption: galleryCaptionFile.text().trim()
+
+            Process {
+                id: galleryLsProc
+                running: true
+                // sort => stable order; nullglob => an empty/missing directory
+                // yields nothing instead of the literal pattern "*.png".
+                command: ["bash", "-c",
+                    "shopt -s nullglob; cd ~/.config/hypr/gallery " +
+                    "2>/dev/null && printf '%s\\n' *.png *.jpg *.jpeg *.gif *.webp | sort"]
+                stdout: StdioCollector {
+                    onStreamFinished: {
+                        const names = this.text.split("\n").filter(n => n.length > 0);
+                        // Only three hand-tuned slot positions exist below (a
+                        // small tilted stack, not a gallery grid), so extra
+                        // files beyond that are ignored rather than crowded in.
+                        // Stacking order is filename sort order and the last
+                        // file painted ends up on top, so which photo is the
+                        // top card is decided by its filename here, not by slot.
+                        root.galleryFiles = names.slice(0, 3).map(
+                            n => "file:///home/woofi/.config/hypr/gallery/" + n);
+                    }
+                }
+            }
+
             // ---- calendar ------------------------------------------------
             // calMonth is 0-based, as in JavaScript.
             property int    calYear:  new Date().getFullYear()
@@ -843,6 +880,11 @@ ShellRoot {
             //  OpacityMask.)
             Item {
                 id: photoStack
+                // Empty gallery dir (a fresh checkout, or the user's own
+                // renamed/emptied) means no card at all rather than three
+                // empty frames -- nothing anchors off this Item's geometry,
+                // but collapsing height too keeps the intent explicit.
+                visible: root.galleryFiles.length > 0
                 // Top left corner, below the bar. The whole block is tilted
                 // slightly, which makes it look laid down rather than aligned.
                 // It is the GROUP that is rotated, not the individual pictures:
@@ -851,9 +893,18 @@ ShellRoot {
                 x: 44
                 y: 62
                 width: 240
-                height: 285
+                height: visible ? 285 : 0
                 rotation: -5
                 transformOrigin: Item.Center
+
+                // Hand-tuned so three overlapping photos read as a laid-down
+                // pile rather than a stack: back-most first (painted first),
+                // most-tilted-forward last (painted last, ends up on top).
+                readonly property var gallerySlots: [
+                    { x: 0,  y: 58, rotation: -13 },
+                    { x: 74, y: 40, rotation: 11 },
+                    { x: 32, y: 0,  rotation: -3 }
+                ]
 
                 component Photo: Rectangle {
                     property alias source: photoImage.source
@@ -913,25 +964,25 @@ ShellRoot {
                 }
 
                 // Order = stacking order; the last one is on top.
-                Photo {
-                    source: "file:///home/woofi/.local/share/backgrounds/gallery/03.png"
-                    x: 0;  y: 58; rotation: -13
-                }
-                Photo {
-                    source: "file:///home/woofi/.local/share/backgrounds/gallery/01.gif"
-                    animated: true
-                    x: 74; y: 40; rotation: 11
-                }
-                Photo {
-                    // The kiss picture goes on top.
-                    source: "file:///home/woofi/.local/share/backgrounds/gallery/02.png"
-                    x: 32; y: 0; rotation: -3
+                Repeater {
+                    model: root.galleryFiles
+                    Photo {
+                        readonly property var slot: photoStack.gallerySlots[index]
+                        source: modelData
+                        animated: modelData.toLowerCase().endsWith(".gif")
+                        x: slot.x; y: slot.y; rotation: slot.rotation
+                    }
                 }
 
                 Text {
+                    visible: root.galleryCaption.length > 0
                     anchors.horizontalCenter: parent.horizontalCenter
                     anchors.bottom: parent.bottom
-                    text: "My only Love <3"
+                    // The slot offsets and each card's own rotation mean the
+                    // pile bottoms out well above this Item's bottom edge, so
+                    // pull the caption up rather than leaving it stranded.
+                    anchors.bottomMargin: 35
+                    text: root.galleryCaption
                     color: root.cMauve
                     font.family: root.uiFont
                     font.pixelSize: 15

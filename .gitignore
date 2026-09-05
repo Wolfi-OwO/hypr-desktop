@@ -2,6 +2,12 @@
 config/hypr/weather.conf
 config/nvim/lazy-lock.json.bak
 config/nvim/.netrwhist
+# Desktop photo-stack card: personal photos and caption, read at runtime
+# from ~/.config/hypr/gallery(-caption.txt), but ignored here too in case
+# either ends up copied into a working tree for local testing.
+config/hypr/gallery-caption.txt
+gallery-caption.txt
+config/hypr/gallery/
 
 # Editor and OS noise
 *.orig
