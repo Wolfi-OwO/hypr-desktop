@@ -6,15 +6,15 @@
 #
 # Runs detached; the caller doesn't block on it.
 #
-# LOG (temporary, 2026-08-08): a "screen stays black for ~30s after opening
-# the lid" report doesn't match any known cause yet, and this loop -- up to
-# 22 retries, 2s apart -- is the only thing in the resume path whose own
-# worst case is close to that duration. Nothing here was ever logged, so
-# there was no way to tell whether this loop is the actual cause or an
-# innocent bystander converging quickly while something else is slow.
-# Logging is/force_redraw calls with timestamps below so the NEXT real
-# lid-open leaves evidence instead of another guess. Truncates each run --
-# only the most recent resume matters. Remove once #123 is root-caused.
+# LOG: started during the investigation into a "screen stays black after
+# opening the lid" report. The root cause (hyprlock's lockdead screen when
+# modeset_cycle disables eDP-1 while a lock surface owns it -- see
+# modeset_cycle below) was found on 2026-08-26 by reproducing it
+# deliberately and capturing grim screenshots, not from this log. It stays
+# anyway: it's the only record of how many dpms_toggle/modeset cycles a
+# given resume actually needed to converge, which is worth having if the
+# convergence timing itself ever regresses. Truncates each run -- only the
+# most recent resume matters.
 LOG=/home/woofi/.local/state/hypr-dpms-ensure-on.log
 log() { printf '%(%H:%M:%S)T %s\n' -1 "$1" >> "$LOG"; }
 
