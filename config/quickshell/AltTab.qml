@@ -1,18 +1,22 @@
-//  GNOME-style Alt+Tab switcher.
+//  Alt+Tab switcher: application tiles with grouped windows behind them.
 //
 //  Behaviour:
-//    Alt+Tab            forward; the overlay appears centred
-//    Alt+Shift+Tab      backward
+//    Alt+Tab (1st tap)  open the overlay, highlight stays on the CURRENT app
+//    Alt+Tab (further)  forward through the other applications
+//    Alt+Shift+Tab      same, backward -- 1st tap also stays on the current app
 //    release Alt        the highlighted application is raised
 //    Enter              the same, without waiting for the release
 //    click on a tile    switches there immediately
 //    Escape             cancel
 //    click beside it    cancel
 //    Down arrow         expand the grouped windows of an application
-//    Left/Right         choose among the expanded windows
+//    Left/Right         choose among the expanded windows, most recently used first
 //
 //  Windows of the same application are collapsed into one tile; an arrow below
-//  the tile shows that there is more than one window behind it.
+//  the tile shows that there is more than one window behind it. Not GNOME
+//  parity any more: GNOME's first press already jumps to the most recently
+//  used app, which the user explicitly did not want here -- see the
+//  `pendingStep` handling below for why that costs an extra tap to reach it.
 //
 //  The release of Alt does NOT come from Hyprland. A `bindr` on Alt_L never
 //  fires there -- Alt_L is processed as a modifier and does not appear in the
@@ -89,7 +93,7 @@ Scope {
                 const PRETTY = {
                     brave: "Brave", chromium: "Chromium", code: "VS Code",
                     jetbrains: "JetBrains", kitty: "Terminal",
-                    nautilus: "Dateien", org: "System"
+                    nautilus: Strings.t.appFiles, org: "System"
                 };
                 const pretty = k => PRETTY[k]
                     || k.split(/[-_.]/)[0].replace(/^./, c => c.toUpperCase());
@@ -101,13 +105,50 @@ Scope {
                     if (!byKey[k]) { byKey[k] = { key: k, name: pretty(k), windows: [] }; order.push(k); }
                     byKey[k].windows.push(w);
                 }
+
+                // `windows` keeps the fh order `wins` arrived in (most
+                // recently focused first) -- that is what the Down-arrow
+                // expanded row wants: pick one of this app's windows, most
+                // recently used first. `canonical` is a SEPARATE field for
+                // the other two readers -- confirm() with nothing expanded,
+                // and the main tile's WindowThumb/caption -- which both want
+                // "the app", not "whichever window of it was touched last".
+                //
+                // Brave/Chromium report one class per PWA -- a hash-suffixed
+                // variant of the base "brave-browser"/"chromium" class -- and
+                // norm() above folds all of them into one group. Without this
+                // split, a Brave PWA focused more recently than the actual
+                // browser became windows[0] and both readers used it --
+                // measured with hyprctl -j activewindow before/after a real
+                // commit: releasing Alt on the tile captioned "Brave" focused
+                // the PWA, not the browser. Reordering `windows` itself fixed
+                // that but broke the expanded row's MRU order, a second, real
+                // requirement -- hence two fields instead of one array
+                // serving both.
+                // ponytail: string-length is a proxy for "base app vs. PWA
+                // derivative", not a real check -- correct as long as PWA
+                // classes stay longer than the class they derive from (true
+                // for Brave/Chromium now). If another app needs the same
+                // distinction under a class scheme where that stops holding,
+                // replace this with an explicit AppGrouping.isCanonical(cls)
+                // instead of guessing from length.
+                for (const k of order) {
+                    byKey[k].canonical = byKey[k].windows.reduce(
+                        (a, b) => b.class.length < a.class.length ? b : a);
+                }
+
                 at.groups = order.map(k => byKey[k]);
                 if (at.index >= at.groups.length) at.index = 0;
 
-                // Replay the key press that triggered the load. The starting
-                // point is always 0 (= the currently focused window), so one
-                // step forward lands on the most recently used one -- exactly
-                // as in GNOME.
+                // Replay any presses that queued up WHILE this load was in
+                // flight (see the `load.running` branch in step()). The very
+                // first press that opens the overlay does not go through
+                // here at all any more -- step() now leaves it out of
+                // `pendingStep` on purpose, so index 0 (the currently focused
+                // application) survives untouched. Deliberate departure from
+                // GNOME's "first press already jumps to the MRU app": the
+                // user asked for the highlight to start on the app already
+                // focused and only move on a press after that.
                 if (at.pendingStep !== 0 && at.groups.length > 0) {
                     const d = at.pendingStep;
                     const n = at.groups.length;
@@ -117,10 +158,6 @@ Scope {
             }
         }
     }
-
-    // Detached: see the note in Menus.qml. A reload must not kill what the
-    // shell started.
-    function run(cmd) { Quickshell.execDetached(["sh", "-c", cmd]); }
 
     function step(dir) {
         stuckGuard.restart();
@@ -137,7 +174,12 @@ Scope {
             // the "twitches / jumps over Brave" report: a flash of the wrong
             // tile before the real data replaced it a few ms later.
             at.groups = [];
-            at.pendingStep = dir;   // applied in onStreamFinished
+            // Not `dir`: the press that OPENS the overlay must land on
+            // index 0 (the current application), not step away from it --
+            // see the reasoning in onStreamFinished. `dir` is deliberately
+            // dropped here; only presses that queue up below, while the
+            // list is still loading, accumulate into pendingStep.
+            at.pendingStep = 0;
             load.running = true;
             return;
         }
@@ -200,14 +242,30 @@ Scope {
         at.subIndex = -1;
         at.pendingStep = 0;
         if (!g) return;
-        const w = g.windows[sub === -1 ? 0 : sub];
+        // Nothing expanded -> the canonical (base-app) window, never a PWA.
+        // A specific sub-window was picked -> exactly that one, from the
+        // same MRU-ordered `windows` array the expanded row displays, so
+        // `sub` always indexes the window the user actually saw highlighted.
+        const w = sub === -1 ? g.canonical : g.windows[sub];
+        // Cheap and permanent: the group-vs-chosen mismatch that caused the
+        // "Alt+Tab can't reach Brave" report only showed up by comparing this
+        // line against `hyprctl -j activewindow` after the fact. Left in so
+        // a future recurrence is diagnosable from `qs log` alone.
+        console.log("alttab confirm: group=" + g.key + " windows=" +
+                     JSON.stringify(g.windows.map(x => x.address + "/" + x.ws)) +
+                     " canonical=" + (g.canonical ? g.canonical.address : "none") +
+                     " chosen=" + (w ? w.address + "/" + w.ws : "none"));
         if (!w) return;
-        // NO hl.dispatch(...) wrapper: `hyprctl dispatch` already wraps its
-        // own argument. Otherwise this becomes hl.dispatch(hl.dispatch(...))
-        // and Hyprland answers "expected a dispatcher".
-        at.run("hyprctl dispatch 'hl.dsp.focus({ window = \"address:"
-               + w.address + "\" })' && "
-               + "hyprctl dispatch 'hl.dsp.window.bring_to_top()'");
+        // Through hypr-focus-window, NOT a raw focuswindow of our own. The
+        // candidate query above deliberately has no workspace filter, so a
+        // minimized app is still an Alt+Tab tile -- and focusing one directly
+        // did not switch to it, it opened the special:minimized stash over the
+        // current workspace, which then followed the user across workspaces.
+        // Measured; the helper carries the numbers. One owner for focus.
+        //
+        // argv form, no sh -c: nothing window-derived is interpolated into a
+        // shell command.
+        Quickshell.execDetached(["hypr-focus-window", w.address]);
     }
 
     function iconFor(cls) {
@@ -367,8 +425,7 @@ Scope {
                                 anchors.margins: parent.border.width
                                 radius: 20
                                 cls: modelData.key
-                                winTitle: modelData.windows.length > 0
-                                          ? modelData.windows[0].title : ""
+                                winTitle: modelData.canonical ? modelData.canonical.title : ""
                                 active: at.shown
                                 fallbackIcon: at.iconFor(modelData.key)
                                 // Always readable: the tile behind it is
@@ -440,7 +497,7 @@ Scope {
 
                     Text {
                         visible: at.groups.length === 0
-                        text: "Keine Fenster"
+                        text: Strings.t.noWindows
                         color: Theme.subtext
                         font.family: Theme.uiFont
                         font.pixelSize: 13
@@ -454,7 +511,7 @@ Scope {
                              at.groups[at.index] &&
                              at.groups[at.index].windows.length > 1 &&
                              at.subIndex === -1
-                    text: Theme.ico(0xf0140) + "  Pfeil runter für alle Fenster"
+                    text: Theme.ico(0xf0140) + "  " + Strings.t.altTabHint
                     color: Theme.surface2
                     font.family: Theme.uiFont
                     font.pixelSize: 11
