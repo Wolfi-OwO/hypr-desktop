@@ -108,7 +108,7 @@ Scope {
     function label(t) {
         if (!cb.isBinary(t)) return t;
         const m = t.match(/binary data (\S+ \S+) (\S+) (\S+)/);
-        return m ? ("Bild  " + m[3] + "  (" + m[1] + ")") : "Bild";
+        return m ? (Strings.t.imageLabel + "  " + m[3] + "  (" + m[1] + ")") : Strings.t.imageLabel;
     }
 
     // =======================================================================
@@ -165,7 +165,7 @@ Scope {
                 spacing: 8
 
                 Text {
-                    text: "ZWISCHENABLAGE"
+                    text: Strings.t.clipboardHeader
                     color: Theme.surface2
                     font.family: Theme.uiFont
                     font.pixelSize: 10
@@ -220,7 +220,7 @@ Scope {
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
                                 visible: search.text.length === 0
-                                text: "Suchen…"
+                                text: Strings.t.search
                                 color: Theme.surface2
                                 font.family: Theme.uiFont
                                 font.pixelSize: 13
@@ -286,8 +286,8 @@ Scope {
                         Text {
                             visible: cb.filtered.length === 0
                             text: cb.entries.length === 0
-                                  ? "Verlauf ist leer"
-                                  : "Nichts gefunden"
+                                  ? Strings.t.historyEmpty
+                                  : Strings.t.nothingFound
                             color: Theme.subtext
                             font.family: Theme.uiFont
                             font.pixelSize: 12
@@ -307,7 +307,7 @@ Scope {
                     HoverHandler { id: wipeHov }
                     Text {
                         anchors.centerIn: parent
-                        text: "Verlauf löschen"
+                        text: Strings.t.clearHistory
                         color: wipeHov.hovered ? Theme.crust : Theme.subtext
                         font.family: Theme.uiFont
                         font.pixelSize: 12

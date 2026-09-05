@@ -135,7 +135,7 @@ Scope {
                 spacing: 10
 
                 Text {
-                    text: "WIEDERGABE"
+                    text: Strings.t.playback
                     color: Theme.surface2
                     font.family: Theme.uiFont
                     font.pixelSize: 10
@@ -146,7 +146,7 @@ Scope {
                 Text {
                     visible: !media.hasPlayer
                     width: parent.width
-                    text: "Nichts wird abgespielt"
+                    text: Strings.t.nothingPlaying
                     color: Theme.subtext
                     font.family: Theme.uiFont
                     font.pixelSize: 12

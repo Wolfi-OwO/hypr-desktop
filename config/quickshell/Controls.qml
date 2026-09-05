@@ -274,9 +274,9 @@ Scope {
                 spacing: 10
 
                 Text {
-                    text: ctl.active === "brightness" ? "HELLIGKEIT"
-                        : ctl.active === "volume" ? "LAUTSTÄRKE"
-                        : ctl.active === "system" ? "SYSTEM" : "BLUETOOTH"
+                    text: ctl.active === "brightness" ? Strings.t.brightness
+                        : ctl.active === "volume" ? Strings.t.volume
+                        : ctl.active === "system" ? Strings.t.system : Strings.t.bluetooth
                     color: Theme.surface2
                     font.family: Theme.uiFont
                     font.pixelSize: 10
@@ -360,7 +360,7 @@ Scope {
                             }
                             Item { width: parent.width - 60; height: 1 }
                             Text {
-                                text: ctl.muted ? "stumm" : ctl.volume + "%"
+                                text: ctl.muted ? Strings.t.muted : ctl.volume + "%"
                                 color: Theme.text
                                 font.family: Theme.uiFont
                                 font.pixelSize: 13
@@ -384,7 +384,7 @@ Scope {
                 // ---------------- per-app mixer ----------------
                 Text {
                     visible: ctl.active === "volume" && ctl.pwStreams.length > 0
-                    text: "ANWENDUNGEN"
+                    text: Strings.t.applications
                     color: Theme.surface2
                     font.family: Theme.uiFont
                     font.pixelSize: 10
@@ -435,7 +435,7 @@ Scope {
                                         Text {
                                             width: 50
                                             horizontalAlignment: Text.AlignRight
-                                            text: streamRow.modelData.audio.muted ? "stumm"
+                                            text: streamRow.modelData.audio.muted ? Strings.t.muted
                                                 : Math.round(streamRow.modelData.audio.volume * 100) + "%"
                                             color: Theme.subtext
                                             font.family: Theme.uiFont
@@ -526,11 +526,11 @@ Scope {
                         value: ctl.sysDown; accent: Theme.maroon
                     }
                     Metric {
-                        label: "Arbeitsspeicher"; icon: 0xf035b
+                        label: Strings.t.memory; icon: 0xf035b
                         value: ctl.sysMem + " GB"; accent: Theme.text
                     }
                     Metric {
-                        label: "Prozessor"; icon: 0xf0ee0
+                        label: Strings.t.processor; icon: 0xf0ee0
                         value: ctl.sysCpu + " %"
                         // Same thresholds as the bar's temperature colouring, so
                         // "warm" means the same thing in both places.
@@ -538,13 +538,13 @@ Scope {
                               : ctl.sysCpu >= 60 ? Theme.yellow : Theme.green
                     }
                     Metric {
-                        label: "Temperatur"; icon: 0xf050f
+                        label: Strings.t.temperature; icon: 0xf050f
                         value: ctl.sysTemp + " °C"
                         accent: ctl.sysTemp >= 85 ? Theme.red
                               : ctl.sysTemp >= 70 ? Theme.yellow : Theme.peach
                     }
                     Metric {
-                        label: "Laufzeit"; icon: 0xf0954
+                        label: Strings.t.uptime; icon: 0xf0954
                         value: ctl.sysUptime; accent: Theme.subtext
                     }
                 }
@@ -574,8 +574,8 @@ Scope {
                             anchors.left: parent.left
                             anchors.leftMargin: 44
                             anchors.verticalCenter: parent.verticalCenter
-                            text: ctl.btPowered ? (ctl.btAdapter ? ctl.btAdapter.name : "Eingeschaltet")
-                                                 : "Ausgeschaltet"
+                            text: ctl.btPowered ? (ctl.btAdapter ? ctl.btAdapter.name : Strings.t.poweredOn)
+                                                 : Strings.t.poweredOff
                             color: Theme.text
                             font.family: Theme.uiFont
                             font.pixelSize: 13
@@ -635,7 +635,7 @@ Scope {
                     Text {
                         visible: ctl.btPowered && ctl.btPairedDevices.length === 0
                                  && ctl.btNearbyDevices.length === 0
-                        text: ctl.btScanning ? "Suche Geräte…" : "Keine Geräte gefunden"
+                        text: ctl.btScanning ? Strings.t.searchingDevices : Strings.t.noDevicesFound
                         color: Theme.subtext
                         font.family: Theme.uiFont
                         font.pixelSize: 12
@@ -652,7 +652,7 @@ Scope {
 
                     Text {
                         visible: ctl.active === "bluetooth" && ctl.btNearbyDevices.length > 0
-                        text: "VERFÜGBAR"
+                        text: Strings.t.available
                         color: Theme.surface2
                         font.family: Theme.uiFont
                         font.pixelSize: 10
@@ -681,7 +681,7 @@ Scope {
 
                         Text {
                             anchors.centerIn: parent
-                            text: ctl.btScanning ? "Suche läuft…" : "Nach Geräten suchen"
+                            text: ctl.btScanning ? Strings.t.scanning : Strings.t.searchDevices
                             color: ctl.btScanning ? Theme.subtext : Theme.mauve
                             font.family: Theme.uiFont
                             font.pixelSize: 12

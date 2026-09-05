@@ -37,7 +37,7 @@ Scope {
     readonly property int barHeight: 40
 
     readonly property var dayKeys:   ["mon","tue","wed","thu","fri","sat","sun"]
-    readonly property var dayLabels: ["Mo","Di","Mi","Do","Fr","Sa","So"]
+    readonly property var dayLabels: Strings.t.weekdays
     property int selectedDay: 0
 
     // The whole document, kept as a JS object. Written back in one piece so a
@@ -48,11 +48,11 @@ Scope {
     // Presets rather than a free number field: these are the values that
     // actually mean something, and typing 4137 K helps nobody.
     readonly property var steps: [
-        { k: 6500, label: "Tageslicht" },
-        { k: 5500, label: "Neutral" },
-        { k: 4500, label: "Warm" },
-        { k: 3800, label: "Wärmer" },
-        { k: 3200, label: "Sehr warm" }
+        { k: 6500, label: Strings.t.presetDaylight },
+        { k: 5500, label: Strings.t.presetNeutral },
+        { k: 4500, label: Strings.t.presetWarm },
+        { k: 3800, label: Strings.t.warmer },
+        { k: 3200, label: Strings.t.presetVeryWarm }
     ]
 
     IpcHandler {
@@ -231,7 +231,7 @@ Scope {
                 spacing: 10
 
                 Text {
-                    text: "NACHTLICHT"
+                    text: Strings.t.nightLight
                     color: Theme.surface2
                     font.family: Theme.uiFont
                     font.pixelSize: 10
@@ -250,7 +250,7 @@ Scope {
                         anchors.left: parent.left
                         anchors.leftMargin: 14
                         anchors.verticalCenter: parent.verticalCenter
-                        text: "Zeitplan aktiv"
+                        text: Strings.t.scheduleActive
                         color: Theme.text
                         font.family: Theme.uiFont
                         font.pixelSize: 13
@@ -423,7 +423,7 @@ Scope {
                         HoverHandler { id: addHover }
                         Text {
                             anchors.centerIn: parent
-                            text: "+ Umschaltpunkt"
+                            text: Strings.t.addSwitchPoint
                             color: Theme.text
                             font.family: Theme.uiFont
                             font.pixelSize: 12
@@ -443,7 +443,7 @@ Scope {
                         HoverHandler { id: copyHover }
                         Text {
                             anchors.centerIn: parent
-                            text: "auf alle Tage"
+                            text: Strings.t.applyToAllDays
                             color: Theme.text
                             font.family: Theme.uiFont
                             font.pixelSize: 12
@@ -458,8 +458,7 @@ Scope {
 
                 Text {
                     width: parent.width
-                    text: "Änderungen wirken sofort. SUPER+SHIFT+N schaltet manuell um; "
-                        + "der Zeitplan übernimmt beim nächsten Umschaltpunkt wieder."
+                    text: Strings.t.scheduleNote
                     color: Theme.surface2
                     font.family: Theme.uiFont
                     font.pixelSize: 10

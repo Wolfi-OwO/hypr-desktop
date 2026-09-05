@@ -76,7 +76,7 @@ Scope {
     function selectedDayLabel() {
         const p = nc.selectedDay.split("-");
         const d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
-        return d.toLocaleDateString(Qt.locale("de_DE"), "dddd, d. MMMM").toUpperCase();
+        return d.toLocaleDateString(Qt.locale(Strings.locale), "dddd, d. MMMM").toUpperCase();
     }
 
     // Open whatever sent a notification, then close the centre.
@@ -545,7 +545,7 @@ Scope {
 
                 Text {
                     id: leftTitle
-                    text: "Benachrichtigungen"
+                    text: Strings.t.notifications
                     color: nc.cText
                     font.family: nc.uiFont
                     font.pixelSize: 15
@@ -569,7 +569,7 @@ Scope {
 
                         Text {
                             visible: server.trackedNotifications.values.length === 0
-                            text: "Keine Benachrichtigungen"
+                            text: Strings.t.noNotifications
                             color: nc.cSurface2
                             font.family: nc.uiFont
                             font.pixelSize: 13
@@ -745,7 +745,7 @@ Scope {
                     spacing: 10
 
                     Text {
-                        text: "Nicht stören"
+                        text: Strings.t.dnd
                         color: nc.cSubtext
                         font.family: nc.uiFont
                         font.pixelSize: 13
@@ -798,7 +798,7 @@ Scope {
 
                 Text {
                     id: dayName
-                    text: clk.date.toLocaleDateString(Qt.locale("de_DE"), "dddd")
+                    text: clk.date.toLocaleDateString(Qt.locale(Strings.locale), "dddd")
                     color: nc.cSubtext
                     font.family: nc.uiFont
                     font.pixelSize: 13
@@ -806,7 +806,7 @@ Scope {
                 Text {
                     id: dayFull
                     anchors.top: dayName.bottom
-                    text: clk.date.toLocaleDateString(Qt.locale("de_DE"), "d. MMMM yyyy")
+                    text: clk.date.toLocaleDateString(Qt.locale(Strings.locale), "d. MMMM yyyy")
                     color: nc.cText
                     font.family: nc.uiFont
                     font.pixelSize: 21
@@ -842,7 +842,7 @@ Scope {
                     }
                     Text {
                         anchors.centerIn: parent
-                        text: nc.viewDate.toLocaleDateString(Qt.locale("de_DE"), "MMMM yyyy")
+                        text: nc.viewDate.toLocaleDateString(Qt.locale(Strings.locale), "MMMM yyyy")
                         color: nc.cText
                         font.family: nc.uiFont
                         font.pixelSize: 14
@@ -886,7 +886,7 @@ Scope {
                     anchors.topMargin: 10
                     width: parent.width
                     Repeater {
-                        model: ["Mo","Di","Mi","Do","Fr","Sa","So"]
+                        model: Strings.t.weekdays
                         delegate: Text {
                             required property var modelData
                             width: weekHead.width / 7
@@ -1046,7 +1046,7 @@ Scope {
                     anchors.topMargin: 8
                     anchors.left: parent.left
                     anchors.right: parent.right
-                    // Stop above the "Alle löschen" button rather than under it.
+                    // Stop above the "Clear all" button rather than under it.
                     anchors.bottom: parent.bottom
                     anchors.bottomMargin: 44
                     clip: true
@@ -1116,7 +1116,7 @@ Scope {
                     Text {
                         anchors.top: parent.top
                         visible: evtList.count === 0 && !CalendarData.loading
-                        text: "Keine Termine"
+                        text: Strings.t.noEvents
                         color: nc.cSurface2
                         font.family: nc.uiFont
                         font.pixelSize: 12
@@ -1137,7 +1137,7 @@ Scope {
                     Text {
                         id: clearText
                         anchors.centerIn: parent
-                        text: "Alle löschen"
+                        text: Strings.t.clearAll
                         color: clearArea.containsMouse ? nc.cCrust : nc.cSubtext
                         font.family: nc.uiFont
                         font.pixelSize: 12

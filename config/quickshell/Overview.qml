@@ -158,7 +158,7 @@ Scope {
                 anchors.topMargin: 16
                 anchors.left: parent.left
                 anchors.leftMargin: 20
-                text: "ARBEITSFLÄCHEN"
+                text: Strings.t.desktops
                 color: Theme.surface2
                 font.family: Theme.uiFont
                 font.pixelSize: 10
@@ -213,7 +213,7 @@ Scope {
                             anchors.right: parent.right
                             anchors.margins: 10
                             text: modelData.windows.length === 0
-                                  ? "leer" : modelData.windows.length + ""
+                                  ? Strings.t.workspaceEmpty : modelData.windows.length + ""
                             color: Theme.surface2
                             font.family: Theme.uiFont
                             font.pixelSize: 11

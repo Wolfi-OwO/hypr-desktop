@@ -443,8 +443,8 @@ Scope {
                 spacing: 8
 
                 Text {
-                    text: menus.active === "apps" ? "ANWENDUNGEN"
-                        : menus.active === "places" ? "ORTE" : "WLAN"
+                    text: menus.active === "apps" ? Strings.t.applications
+                        : menus.active === "places" ? Strings.t.places : Strings.t.wifi
                     color: Theme.surface2
                     font.family: Theme.uiFont
                     font.pixelSize: 10
@@ -535,7 +535,7 @@ Scope {
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
                                 visible: search.text.length === 0
-                                text: "Suchen…"
+                                text: Strings.t.search
                                 color: Theme.surface2
                                 font.family: Theme.uiFont
                                 font.pixelSize: 13
@@ -593,7 +593,7 @@ Scope {
                         // --- Wi-Fi ---
                         Text {
                             visible: menus.active === "wifi" && menus.wifiNetworks.length === 0
-                            text: "Suche Netzwerke…"
+                            text: Strings.t.searchNetworks
                             color: Theme.subtext
                             font.family: Theme.uiFont
                             font.pixelSize: 12
@@ -646,7 +646,7 @@ Scope {
                                 spacing: 6
 
                                 Text {
-                                    text: "Passwort für „" + menus.wifiPskTarget + "“"
+                                    text: Strings.passwordFor(menus.wifiPskTarget)
                                     color: Theme.subtext
                                     font.family: Theme.uiFont
                                     font.pixelSize: 11
@@ -685,7 +685,7 @@ Scope {
                         // bottom of the list instead of being the only option.
                         MenuRow {
                             visible: menus.active === "wifi"
-                            label: "Erweiterte Netzwerkeinstellungen"
+                            label: Strings.t.advancedNetworkSettings
                             icon: 0xf0493
                             onTriggered: menus.run("nm-connection-editor")
                         }

@@ -216,7 +216,7 @@ Scope {
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.top: pct.bottom
                 anchors.topMargin: 4
-                text: chg.etaLabel(chg.shownEta) || "Wird geladen"
+                text: chg.etaLabel(chg.shownEta) || Strings.t.battCharging
                 color: Theme.subtext
                 font.family: Theme.uiFont
                 font.pixelSize: 12
