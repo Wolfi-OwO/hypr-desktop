@@ -80,9 +80,13 @@ Scope {
             "hl.dsp.focus({ workspace = " + String(id) + " })"]);
         ov.close();
     }
+    // Through hypr-focus-window, not a raw focuswindow: the overview lists
+    // minimized windows too, and focusing one directly opened the
+    // special:minimized stash over the current workspace instead of switching
+    // to the window -- which then followed the user across workspaces.
+    // Measured; the helper carries the numbers. One owner for focus.
     function goWindow(addr) {
-        Quickshell.execDetached(["hyprctl", "dispatch",
-            "hl.dsp.focus({ window = \"address:" + addr + "\" })"]);
+        Quickshell.execDetached(["hypr-focus-window", addr]);
         ov.close();
     }
     function move(d) {
