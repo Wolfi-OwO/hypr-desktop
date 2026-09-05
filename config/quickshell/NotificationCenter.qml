@@ -115,10 +115,31 @@ Scope {
 
         const entry = (n.desktopEntry || "").replace(/\.desktop$/, "");
         const needle = entry !== "" ? entry : (n.appName || "");
-        if (needle !== "") {
-            const exec = entry !== "" ? "gtk-launch " + entry : ":";
-            Quickshell.execDetached(["sh", "-c",
-                "/home/woofi/.local/bin/hypr-launch '" + needle + "' " + exec]);
+        // Trust boundary: desktopEntry and appName come straight from the
+        // D-Bus sender. These two used to be concatenated into an `sh -c`
+        // string, so a sender setting desktop-entry to  x'; touch /tmp/x; '
+        // got arbitrary shell as the user the moment the toast was clicked.
+        //
+        // The shape check is what closes that, not the argv form: hypr-launch
+        // runs `setsid sh -c "$EXEC"` by design, so the exec words reach a
+        // shell however they are passed. argv only removes the second
+        // concatenation.
+        //
+        // It guards `entry` specifically, because entry is the only value that
+        // becomes EXEC and reaches that shell. `needle` is $1 in hypr-launch
+        // and from there only ever sees `printf '%s' "$1" | tr` and
+        // `jq --arg` -- never a shell. Guarding the needle instead was
+        // measured to break the appName-only raise for every app whose name
+        // has a space in it ("Google Chrome", "Visual Studio Code"): the click
+        // silently stopped raising an already-open window. Desktop entry IDs
+        // really are this shape, so the check costs nothing.
+        //
+        // Either way a rejected entry skips only the raise, never the sender's
+        // own actions below.
+        if (needle !== "" && (entry === "" || /^[A-Za-z0-9._-]+$/.test(entry))) {
+            Quickshell.execDetached(entry !== ""
+                ? ["/home/woofi/.local/bin/hypr-launch", needle, "gtk-launch", entry]
+                : ["/home/woofi/.local/bin/hypr-launch", needle, ":"]);
         }
 
         const acts = n.actions || [];
