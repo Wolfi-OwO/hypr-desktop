@@ -395,3 +395,41 @@ window (logical geometry from `hyprctl clients -j`, scale 2 -- physical
 pixels for grim, logical for hyprctl) showed the visibly different
 letterforms. Re-checked after a full quit and cold relaunch (not just a
 `Ctrl+R` reload) to rule out a reload-only fix that would not survive.
+
+## Restoring BetterDiscord plugins/themes from a personal export
+
+BD plugins and themes are just files dropped into `~/.config/BetterDiscord/
+plugins/` and `.../themes/` -- restoring a set exported from another machine
+is a one-time unzip-and-copy, not something worth a script for. Deliberately
+manual and deliberately outside this repo: BD plugin *config* files
+routinely contain Discord snowflake IDs (friend list, DM partners, pinned
+DMs) picked up the moment a plugin is configured, and this repo's remote is
+public. `~/.config/BetterDiscord/` stays untracked in full, same as the
+Task 6/7 reasoning for why BD itself is absent from `install.sh`.
+
+Before overwriting anything: back up the live `~/.config/BetterDiscord/`
+first (a plain `cp -r`, timestamped, kept outside the repo) -- the live
+configs are not in git and not otherwise backed up, so an overwrite without
+one is unrecoverable. Where an incoming file collides with a live one,
+prefer the incoming file (it's the newer export), but diff every collision
+first rather than overwriting blind -- in practice this only ever hit the
+per-plugin `.config.json` files (the personal settings), never the
+`.plugin.js` code, which round-tripped byte-identical.
+
+Third-party plugin `.plugin.js` is arbitrary code that runs inside an
+authenticated Discord session -- worth a quick read before installing, not
+a blind trust of "the user already had 11 of these running". Checked every
+plugin's `@source` header and grepped for `eval(`, hardcoded webhook POSTs,
+and any non-Discord, non-author network host; nothing alarming turned up
+(the only "webhook" hit was Discord's own `MANAGE_WEBHOOKS` permission
+constant in a permissions-viewer plugin, not a plugin exfiltrating
+anything).
+
+A theme is a strong font-conflict candidate (a full theme commonly sets its
+own `--font-primary`/`--font-headline`) -- grep the incoming theme CSS for
+`--font`/`gg sans` before assuming the custom-CSS font override in
+`config/betterdiscord/custom.css` still wins, the same way the two
+pre-existing themes were checked when that override was first written.
+Installing a theme is not the same as enabling it: BD only activates a
+theme a user explicitly toggles on in its own UI, so dropping theme files
+in leaves the enabled set exactly as the user left it.
