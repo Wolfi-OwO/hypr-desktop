@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""Keep the machine awake until hyprlock has really finished locking.
+
+THE PROBLEM
+-----------
+On a lid close hypridle locks the screen from before_sleep_cmd, and its own
+sleep inhibitor (inhibit_sleep = 3) is released on Hyprland's lock-notify
+"locked". That event reaches hypridle BEFORE hyprlock has been told it is
+locked (hyprlock's own "onLockLocked") and before it has rendered its labels.
+Measured 2026-09-20 over real suspends (RTC alarm, `grim` loop, journal):
+
+  08:59:59.559  hyprlock "Locking session"
+  08:59:59.700  hypridle "Wayland session got locked", inhibitor released
+  08:59:59.745  systemd froze user.slice          <- 45 ms later
+  09:00:26.890  hyprlock "onLockLocked called"    <- only after the thaw
+
+hyprlock was frozen mid-handshake, and the first two captures after resume had
+wallpaper, card and input field but no text (labels come from asynchronous
+resources; hyprlock 0.9.6 only preloads images).
+
+WHY A SEPARATE, ALWAYS-RUNNING PROCESS
+--------------------------------------
+Everything cheaper was measured and failed:
+  * A delay inhibitor taken by hypr-lock is IGNORED by logind: it is created
+    after the sleep request is already pending (registered, listed by
+    `systemd-inhibit --list`, and suspend still entered 541 ms after the lock
+    request).
+  * A wait in the system-sleep "pre" hook runs after systemd froze user.slice,
+    so hyprlock cannot draw while it waits.
+Only an inhibitor that already exists when the request arrives counts, so this
+daemon holds a sleep DELAY inhibitor continuously and gives it up only once
+hyprlock is done.
+
+WHAT IT WAITS FOR
+-----------------
+The real signal: hyprlock logs "onLockLocked called" (lock confirmed by the
+compositor, after its first full frame) to the journal under hypridle.service
+at default verbosity. In timestamped `hyprlock -v` runs the frame after that
+event was the first with every label present (label textures landed 129-330 ms
+after "Locking session"; onLockLocked +318 ms; that frame +329 ms). SETTLE_S
+covers that frame reaching the panel.
+
+Decision at PrepareForSleep(true):
+  * locked > SETTLE_S ago     -> release now, nothing to wait for
+  * lock not started yet      -> wait up to APPEAR_S for "Locking session"
+                                 (the request precedes hypr-lock by ~5 ms and
+                                 hyprlock's own log line by 170-190 ms), then
+                                 for onLockLocked + SETTLE_S; if no lock ever
+                                 starts (hypridle down, lock failed) release
+  * always                    -> never hold longer than MAX_WAIT_S in total, far
+                                 below logind's InhibitDelayMaxSec (10 s), so a
+                                 crashed hyprlock costs a few seconds, not a
+                                 stuck suspend
+On PrepareForSleep(false) the inhibitor is taken again. Nothing here looks at
+the lid: it only reacts to logind's sleep signal, whoever caused it.
+
+LIMITATION: only sees locks started by hypridle
+-----------------------------------------------
+The journal tail above is `-u hypridle.service`, so hyprlock's phase is only
+visible when hypridle started it (lock_cmd, before_sleep_cmd, the idle
+listener) - hyprlock is then a child process and logs there. A lock started
+straight from Hyprland's own SUPER+L keybind (config/hypr/hyprland.lua:67)
+bypasses hypridle entirely and is invisible here, so the gate falls through
+to the APPEAR_S (0.8 s) "no lock started" release. That is bounded
+degradation, not a stuck suspend: at most 0.8 s of extra held sleep before
+the machine suspends anyway.
+"""
+import os
+import re
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+import gi
+
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib  # noqa: E402
+
+SETTLE_S = 0.15    # frame after onLockLocked reaching the panel
+APPEAR_S = 0.8     # how long to wait for a lock to start at all
+MAX_WAIT_S = 3.0   # hard bound on holding suspend
+TICK_MS = 20
+
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+# Written by the journal thread, read by the main loop. Plain assignments of
+# (phase, monotonic time) tuples, atomic under the GIL, no lock needed.
+lock_state = {"phase": "unlocked", "t": time.monotonic()}
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def watch_journal():
+    """Track hyprlock's phase from its own log lines. Restarts itself."""
+    while True:
+        try:
+            p = subprocess.Popen(
+                ["journalctl", "--user", "-u", "hypridle.service",
+                 "-f", "-n", "0", "-o", "cat"],
+                stdout=subprocess.PIPE, text=True, errors="replace")
+            for line in p.stdout:
+                line = ANSI.sub("", line)
+                now = time.monotonic()
+                if "Locking session" in line:
+                    lock_state.update(phase="locking", t=now)
+                elif "onLockLocked called" in line:
+                    lock_state.update(phase="locked", t=now)
+                elif "Unlocked, exiting" in line or "Reached the end, exiting" in line:
+                    lock_state.update(phase="unlocked", t=now)
+            p.wait()
+        except Exception as e:  # noqa: BLE001 - keep the gate alive
+            log(f"journal watcher error: {e!r}")
+        time.sleep(1)
+
+
+class Gate:
+    def __init__(self):
+        self.bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        self.fd = None
+        self.timer = None
+        self.req_t = 0.0
+        self.take()
+        self.bus.signal_subscribe(
+            "org.freedesktop.login1", "org.freedesktop.login1.Manager",
+            "PrepareForSleep", "/org/freedesktop/login1", None,
+            Gio.DBusSignalFlags.NONE, self.on_sleep, None)
+
+    def take(self):
+        if self.fd is not None:
+            return
+        res, fds = self.bus.call_with_unix_fd_list_sync(
+            "org.freedesktop.login1", "/org/freedesktop/login1",
+            "org.freedesktop.login1.Manager", "Inhibit",
+            GLib.Variant("(ssss)", ("sleep", "hypr-lock-sleep-gate",
+                                    "waiting for hyprlock to finish locking",
+                                    "delay")),
+            GLib.VariantType("(h)"), Gio.DBusCallFlags.NONE, -1, None, None)
+        self.fd = fds.get(res.get_child_value(0).get_handle())
+        log("holding sleep delay inhibitor")
+
+    def release(self, why):
+        if self.timer is not None:
+            GLib.source_remove(self.timer)
+            self.timer = None
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+        log(f"released after {(time.monotonic() - self.req_t) * 1000:.0f} ms: {why}")
+
+    def on_sleep(self, _c, _s, _p, _i, _sig, params, _u):
+        going_to_sleep = params.get_child_value(0).get_boolean()
+        if not going_to_sleep:
+            self.take()
+            return
+        self.req_t = time.monotonic()
+        log(f"sleep requested, hyprlock phase={lock_state['phase']}")
+        if self.timer is not None:
+            GLib.source_remove(self.timer)
+            # Clear it now: a second PrepareForSleep(true) while a tick is
+            # still pending (an aborted-then-retried suspend within 3 s) can
+            # hit the early "already locked" release below, which also calls
+            # source_remove on self.timer. Leaving the stale id there made
+            # that a double-remove -> GLib critical, fatal under
+            # G_DEBUG=fatal-criticals.
+            self.timer = None
+        # Locked long ago: nothing to wait for. Locked a moment ago: the tick
+        # below still applies the settle time.
+        if lock_state["phase"] == "locked" and \
+                self.req_t - lock_state["t"] >= SETTLE_S:
+            self.release("already locked")
+            return
+        self.timer = GLib.timeout_add(TICK_MS, self.tick)
+
+    def tick(self):
+        now = time.monotonic()
+        waited = now - self.req_t
+        phase, t = lock_state["phase"], lock_state["t"]
+        # The source is removed by returning False, so forget it first.
+        if phase == "locked" and now - t >= SETTLE_S:
+            self.timer = None
+            self.release("hyprlock onLockLocked + settle")
+            return False
+        if phase == "unlocked" and waited >= APPEAR_S:
+            self.timer = None
+            self.release("no lock started")
+            return False
+        if waited >= MAX_WAIT_S:
+            self.timer = None
+            self.release(f"bound reached, phase={phase}")
+            return False
+        return True
+
+
+def main():
+    threading.Thread(target=watch_journal, daemon=True).start()
+    Gate()
+    loop = GLib.MainLoop()
+    try:  # newer PyGObject moved this; the old name still works but warns
+        from gi.repository import GLibUnix
+        add_signal = GLibUnix.signal_add
+    except ImportError:
+        add_signal = GLib.unix_signal_add
+    for s in (signal.SIGTERM, signal.SIGINT):
+        add_signal(GLib.PRIORITY_DEFAULT, s, loop.quit)
+    loop.run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

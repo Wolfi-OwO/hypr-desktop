@@ -299,6 +299,118 @@ consecutive "on" readings 2s apart before giving up. This is still a
 mitigation, not a fix; the SSDT-override trade-off above is unchanged and
 still not attempted for the same reason.
 
+## Clock is stale for minutes after a long suspend
+
+`timedatectl show-timesync` reports a last NTP exchange from well before the
+suspend, even though the machine has been awake and online for several
+minutes. `systemd-timesyncd` has no `login1`/`PrepareForSleep` integration at
+all -- it only polls on its own schedule and never re-polls just because the
+machine woke up, so a long suspend leaves it stale for however long is left
+on that schedule.
+
+Measured on 2026-09-12: suspended at 21:22:34, resumed at 12:09:54 the next
+day, Wi-Fi back within 4 seconds of resume, but `timedatectl show-timesync`
+at 12:18:31 (8.5 minutes after resume) still showed the exchange from
+21:16:45 the day before -- roughly 15 hours stale despite the network having
+been usable the whole time since wake.
+
+Fixed by forcing a resync from the existing resume hook rather than adding a
+new unit: `systemd/system-sleep/hypr-resume` now runs
+`systemctl --no-block try-restart systemd-timesyncd.service` right after its
+`post` guard. `--no-block` matters here for the same reason it matters
+everywhere else in that file -- see the header comment on why a blocking
+call in a `system-sleep` hook freezes `user.slice` for its whole duration.
+
+## Lockdead screen flashes before the real lock screen on lid-open
+
+Opening the lid briefly shows Hyprland's own `lockdead.png`/`lockdead2.png`
+placeholder before the actual `hyprlock` frame appears, looking like an
+error screen rather than a lock screen.
+
+Root cause, found from hypridle's own journal timeline across a real
+suspend/resume cycle: the lock was *requested* (`loginctl lock-session` via
+`before_sleep_cmd`) less than a second before the kernel actually entered
+suspend, so `hyprlock` never got a chance to render its first frame before
+the screen went dark. On resume, Hyprland has nothing real to show for the
+"locked" state yet and paints the lockdead placeholder until `hyprlock`
+finishes catching up and its actual confirmation
+(`hyprland-lock-notify-v1`) arrives -- in the captured timeline that
+confirmation only landed after the full suspend duration, i.e. the lock had
+never actually completed before the machine went to sleep in the first
+place.
+
+Fixed with two changes working together:
+
+- `hypridle.conf`'s `general {}` block now sets `inhibit_sleep = 3`, which
+  holds logind's sleep-delay inhibitor until `hyprland-lock-notify-v1`
+  confirms the lock actually rendered, instead of releasing it the instant
+  the lock is merely requested.
+- `/etc/systemd/logind.conf.d/10-inhibit-delay.conf` raises
+  `InhibitDelayMaxSec` from logind's 5-second default to 10. Hyprland's own
+  fallback log line is "Sending locked after a 5 second timeout" -- exactly
+  equal to the old default -- so the wait could otherwise get truncated at
+  the worst possible moment, right before the lock finishes. Tracked in this
+  repo at `systemd/logind.conf.d/10-inhibit-delay.conf`; `install.sh` does
+  not copy it (root-owned target), so apply it by hand:
+  `sudo cp systemd/logind.conf.d/10-inhibit-delay.conf /etc/systemd/logind.conf.d/`
+  then `sudo systemctl reload systemd-logind`.
+
+Accepted trade-off: lid-close to actual suspend can now take up to ~11
+seconds in the worst case (previously ~1 second), since suspend cannot
+proceed until the inhibitor is released or the delay cap is hit.
+`HandleLidSwitch` itself is untouched and still defaults to `suspend`.
+
+## Lock screen shows without text, goes black, then comes back on lid-open
+
+Lid closed without SUPER+L, so the lock is requested by hypridle's
+`before_sleep_cmd`. On lid-open the lock screen sometimes appeared without its
+text, then the panel went black for about a second, then the complete lock
+screen came back. Two separate causes, measured with `hyprlock -v` timestamps
+and a `grim` capture loop over a real `systemctl suspend` with an RTC alarm:
+
+**The black gap was the recovery toggle.** `hypr-dpms-ensure-on` ran
+`dpms off`, 0.2 s, `dpms on` on every resume. The `dpms on` dispatch itself
+blocks about 1.1 s while the eDP panel re-lights, so the screen was black for
+1.3 s: the capture right after resume was the complete lock screen, the next
+one was pure black (mean luminance 0.0) and blocked for 1.3 s, then the same
+lock screen returned. Shortening the 0.2 s sleep buys nothing. The toggle now
+runs only if Hyprland already reports DPMS off, or the kernel has logged the
+EC firmware fault (`WM00`, `AE_NOT_FOUND`) since the resume, and the script keeps
+watching for that fault for about 12 s after a skipped toggle. After the change
+the same cycle showed 21 consecutive complete captures starting 34 ms after
+resume and no black one. Not provable: a panel that goes dark with no software
+signal at all is no longer recovered. `i915.enable_dc=0` (see the black-screen
+entry above) is what fixes the known cause, and the old toggle was already
+recorded as not recovering it. `HYPR_DPMS_ALWAYS_TOGGLE=1` in the environment of
+`hypr-dpms-ensure-on` restores the old behaviour.
+
+**Text-less lock screen right after resume.** A real `systemctl suspend`
+with an RTC alarm and a full-resolution `grim` loop showed the first two
+captures after resume with wallpaper, card, avatar and input field but no text
+(suspend exit 09:00:26.733, captures at 26.779 and 26.876, text back at 26.951).
+Cause: hypridle's `inhibit_sleep = 3` releases on Hyprland's lock-notify
+"locked" (59.700), which arrives before hyprlock has been told it is locked.
+`systemd` froze `user.slice` 45 ms later and hyprlock's own `onLockLocked` only
+ran after the thaw (26.890). A delay inhibitor taken from `hypr-lock` does not
+help (logind ignores inhibitors created after the sleep request: suspend entered
+541 ms after the lock request) and neither does a wait in the `pre` phase of
+`hypr-resume` (it runs after the freeze, hyprlock cannot draw meanwhile).
+
+`bin/hypr-lock-sleep-gate` (user unit `hypr-lock-sleep-gate.service`) holds a
+sleep delay inhibitor continuously, so it exists before any request, and gives
+it up once hyprlock logs `onLockLocked called` (read from the journal under
+`hypridle.service`) plus 150 ms, never later than 3 s after the request, and
+after 0.8 s if no lock starts at all. Three real cycles: gate released 764,
+1090 and 726 ms after the request; `PM: suspend entry` came 265, 504 and 226 ms
+after `onLockLocked`; the last capture before suspend had the text in all three
+(795 bright pixels at 1/4 scale, against 22 for a text-less frame), and the
+first capture after resume, 78 to 80 ms after `PM: suspend exit`, was complete
+in all three with no black capture. Residual: the big clock can show the minute
+from before suspend for up to a second (it refreshes every second).
+
+Test cycles are easy to spoil: any key press wakes the machine early
+(`/sys/power/pm_wakeup_irq` reads `1`, the i8042 keyboard, after such a wake).
+
 ## BetterDiscord stops working after Discord updates itself
 
 Discord on Linux self-updates independently of pacman: it downloads a fresh

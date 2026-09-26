@@ -137,7 +137,7 @@ info "  ~/.config/systemd/user/*.service, *.timer"
 info "  ~/.config/hypr/weather.conf (only if you answer the step 4 prompt; left alone if it already exists)"
 info ""
 info "systemd --user units enabled: mosquitto hypr-eventd hypr-calendar-cache(+.timer)"
-info "  hypr-resume-refresh.timer hypridle hyprpolkitagent hyprsunset"
+info "  hypr-resume-refresh.timer hypridle hypr-lock-sleep-gate hyprpolkitagent hyprsunset"
 info "  hypr-sunset-scheduler(+.timer) hypr-boot-report"
 info "  NOT enabled: hypr-backup.timer (needs a restic destination you choose)"
 
@@ -310,7 +310,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now mosquitto.service hypr-eventd.service
 systemctl --user enable --now hypr-calendar-cache.service hypr-calendar-cache.timer
 systemctl --user enable --now hypr-resume-refresh.timer
-systemctl --user enable --now hypridle.service hyprpolkitagent.service hyprsunset.service
+systemctl --user enable --now hypridle.service hypr-lock-sleep-gate.service hyprpolkitagent.service hyprsunset.service
 systemctl --user enable --now hypr-sunset-scheduler.service hypr-sunset-scheduler.timer
 systemctl --user enable --now hypr-boot-report.service
 

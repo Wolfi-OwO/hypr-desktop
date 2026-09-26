@@ -36,6 +36,14 @@
 
 [ "$1" = "post" ] || exit 0
 
+# Force an NTP resync: systemd-timesyncd has no login1/PrepareForSleep
+# integration at all, so it never re-polls after suspend. Measured
+# 2026-09-12: resume 12:09:54, Wi-Fi back 12:09:58, but at 12:18:31
+# (8.5 min post-resume) the last NTP exchange was still from the day
+# before (~15h stale). --no-block is mandatory: this hook must return
+# immediately or it holds user.slice frozen for its duration.
+systemctl --no-block try-restart systemd-timesyncd.service
+
 # Resolve the graphical user rather than hardcoding a uid: this file appears in
 # the public repository's troubleshooting notes and should not assume 1000.
 USER_NAME=$(loginctl list-sessions --no-legend 2>/dev/null \
@@ -55,26 +63,14 @@ setsid timeout 30 runuser -u "$USER_NAME" -- \
     systemctl --user --no-block start hypr-resume-refresh.service \
     >/dev/null 2>&1 &
 
-# Blank the panel as the very first thing anything does on resume.
-#
-# i915 re-lights the panel with whatever was in the framebuffer before suspend
-# as part of its own resume path -- that happens at the kernel level, before
-# this hook even starts, and nothing here can pre-empt it. What this CAN do is
-# shrink the window the stale frame stays up for: hypridle's own
-# after_sleep_cmd (hypr-post-resume) already forces a real off/on toggle, but
-# it only runs once hypridle's Wayland idle-notify round trip through the full
-# user session completes. This talks to Hyprland directly and skips all of
-# that, so the panel usually goes black before the stale frame is even
-# consciously seen rather than after. hypr-post-resume still does the
-# guaranteed-redraw "on" a moment later; this only tries to win the race to
-# "off".
-setsid timeout 5 runuser -u "$USER_NAME" -- sh -c '
-    export XDG_RUNTIME_DIR="/run/user/'"$USER_UID"'"
-    export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"
-    his=$(/bin/ls "$XDG_RUNTIME_DIR/hypr/" 2>/dev/null | head -1)
-    [ -n "$his" ] || exit 0
-    export HYPRLAND_INSTANCE_SIGNATURE="$his"
-    hyprctl dispatch '"'"'hl.dsp.dpms("off")'"'"' >/dev/null 2>&1
-' >/dev/null 2>&1 &
+# The panel-blanking block that used to live here is gone: it never actually
+# won the race it was meant to win. Measured 2026-09-12: the only runuser PAM
+# session in the whole resume window opened 4.5s after "PM: suspend exit",
+# 1.5s AFTER the user had already authenticated and unlocked -- so a late
+# dpms("off") here would blank an already-UNLOCKED desktop with nothing left
+# running to turn it back on. hyprlock's fades are disabled now too (see
+# hyprlock.conf), which makes the actual first lock frame the real lock
+# screen instead of a stale desktop capture, removing the need for this
+# workaround in the first place.
 
 exit 0

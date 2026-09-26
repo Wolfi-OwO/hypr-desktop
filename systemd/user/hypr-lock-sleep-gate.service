@@ -1,0 +1,25 @@
+[Unit]
+Description=Hold suspend until hyprlock has finished locking
+Documentation=file:%h/.local/bin/hypr-lock-sleep-gate
+# Must already be running BEFORE a sleep request: logind honours only delay
+# inhibitors that exist when the request arrives (measured 2026-09-20, see the
+# header of hypr-lock-sleep-gate). Needs the compositor for nothing itself, but
+# the lock it waits for only exists in a Hyprland session.
+# StartLimitIntervalSec belongs here, not in [Service]: a start before logind or
+# the journal is ready must not become a permanent failure.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/hypr-lock-sleep-gate
+# WantedBy=default.target starts this with the user manager (graphical-session
+# .target never activates under Hyprland). It only needs the system bus and the
+# journal, so no Wayland retry loop is needed.
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+# The inhibitor is released on exit by the kernel (fd close), so a crash or a
+# stop can never leave suspend blocked.
+
+[Install]
+WantedBy=default.target

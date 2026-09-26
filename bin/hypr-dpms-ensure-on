@@ -162,17 +162,80 @@ modeset_cycle() {
     fi
 }
 
-dpms_toggle
+# The unconditional toggle that used to run right here is now gated. Measured
+# 2026-09-20 with a grim capture loop over a real logind suspend/resume: the
+# lock screen was complete and correct on the first frame after resume, then
+# the toggle blanked it for 1.3 s (`dpms off`, 0.2 s, `dpms on` -- and the
+# `hyprctl dispatch dpms on` call ITSELF blocks ~1.1 s while the eDP panel
+# re-lights, so shortening the 0.2 s buys nothing) before the identical lock
+# screen came back. That guaranteed black gap was traded against a rare stuck
+# panel, and the stuck panel's cause is now fixed at the source: i915.enable_dc=0
+# is on the live kernel cmdline (DC5/DC6 not re-linking eDP after s2idle,
+# see TROUBLESHOOTING.md), and on 2026-08-10 the toggle was already recorded
+# as NOT recovering that failure anyway. What can still be observed in
+# software is the EC firmware fault (\_SB...EC0._Q44/_Q12.WM00, AE_NOT_FOUND)
+# that the notes tie to the black-after-resume reports; it is logged within
+# seconds of a resume and appeared on none of this boot's resumes, including a
+# real lid cycle. So: toggle immediately if Hyprland already says DPMS is off
+# or that fault has been logged since the resume, otherwise keep watching for
+# it (below) and toggle the moment it shows up. Not provable: a panel that
+# goes dark with NO software signal is not recovered. HYPR_DPMS_ALWAYS_TOGGLE=1
+# (or ALWAYS_TOGGLE=1 here) restores the old always-toggle behaviour.
+ALWAYS_TOGGLE="${HYPR_DPMS_ALWAYS_TOGGLE:-0}"
+
+# Output is captured into a variable, never piped into `grep -q`/`grep -m1`:
+# with pipefail set, an early-exiting grep can SIGPIPE journalctl and turn a
+# real match into a nonzero status.
+resume_epoch() {
+    local out line
+    out="$(journalctl -k -b --no-pager -o short-unix 2>/dev/null)"
+    line="$(printf '%s\n' "$out" | grep 'PM: suspend exit' | tail -1)"
+    printf '%s\n' "${line%%.*}"
+}
+RESUME_AT="$(resume_epoch)"
+
+# Kernel-logged EC fault since 3 s before the last resume (the fault can be
+# stamped just ahead of the "suspend exit" line).
+ec_fault_seen() {
+    [ -n "${RESUME_AT:-}" ] || return 1
+    local out
+    out="$(journalctl -k -b --no-pager -o cat --since "@$((RESUME_AT - 3))" 2>/dev/null)"
+    case "$out" in *WM00*) return 0 ;; esac
+    return 1
+}
+
+toggled=0
+if [ "$ALWAYS_TOGGLE" = 1 ]; then
+    log "toggle: ALWAYS_TOGGLE set"
+    dpms_toggle; toggled=1
+elif ec_fault_seen; then
+    log "toggle: EC WM00 fault logged since resume"
+    dpms_toggle; toggled=1
+elif ! is_on; then
+    log "toggle: Hyprland reports DPMS off"
+    dpms_toggle; toggled=1
+else
+    log "skipping initial toggle: DPMS on, no EC WM00 fault since resume (resume_at=${RESUME_AT:-unknown})"
+fi
 
 consecutive_on=0
 consecutive_off=0
 for i in $(seq 1 22); do
     sleep 2
+    # Fault logged after the decision above: recover now, once.
+    if [ "$toggled" = 0 ] && ec_fault_seen; then
+        log "check $i: EC WM00 fault appeared late -- toggling"
+        dpms_toggle; toggled=1; consecutive_on=0
+        continue
+    fi
     if is_on; then
         consecutive_on=$((consecutive_on + 1))
         consecutive_off=0
         log "check $i: on (streak $consecutive_on)"
-        if [ "$consecutive_on" -ge 2 ]; then
+        # A skipped toggle keeps watching ~12 s for a late fault instead of
+        # the usual 4 s.
+        need=2; [ "$toggled" = 0 ] && need=6
+        if [ "$consecutive_on" -ge "$need" ]; then
             log "done: converged after ${i}x2s"
             exit 0
         fi

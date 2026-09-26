@@ -61,27 +61,26 @@ if ! flock -n 9; then
 fi
 log "flock acquired"
 
-# DPMS has been observed going back off on its own within seconds of a lock
-# taking effect -- no error, no log line anywhere (hypridle, kernel, Hyprland's
-# own log all silent), display fine again only after ~a minute or a manual
-# `dpms on`. Below whatever this machine can inspect in software, so this
-# doesn't fix the cause -- it just stops the user from staring at black for a
-# minute every time. Detached: must not delay the exec below.
-#
-# 9>&- closes OUR flock fd in that child before it backgrounds. Without it,
-# `setsid ... &` inherits fd 9 open, and flock() locks the open file
-# description, not the process -- so the recovery script (which can run for
-# up to ~44s, see its own 22x2s retry loop) would keep the lock held long
-# after hyprlock itself had exited and unlocked. A real, independently
-# confirmed defect (verified live via /proc/<pid>/fd/9 on both the recovery
-# child and hyprlock) even though it turned out NOT to explain the
-# 2026-08-26 pid-111267 silence above -- that lockfile had no prior holder
-# this boot, so this fd leak specifically cannot have been that incident's
-# cause. Fixed anyway: a leaked fd across `&` is a real bug regardless of
-# whether it fired that particular night.
-log "launching dpms-ensure-on (detached, fd 9 closed for it)"
-setsid /home/woofi/.local/bin/hypr-dpms-ensure-on >/dev/null 2>&1 9>&- &
-disown
+# hypr-dpms-ensure-on used to launch from here too, at LOCK time. Removed:
+# that made hypridle's legitimate after_sleep_cmd-driven instance dead on
+# arrival every single suspend cycle. Measured 2026-09-12 from
+# /home/woofi/.local/state/hypr-dpms-ensure-on.log: one "start" line at
+# 14:07:40 (lock time), which froze through suspend still holding the flock
+# and didn't release it until 14:35:27, while the legitimate resume-time
+# instance (launched by hypr-post-resume, journal shows it starting
+# 14:35:25.726) hit `flock -n 8` and exited silently -- starved by the
+# lock-time instance the whole time it mattered. The lock-time instance also
+# power-cycled DPMS off-then-on while the lock surface was coming up, the
+# exact pattern hypridle.conf already documents as crashing hyprlock
+# (hyprwm/hyprlock#953). hypr-post-resume is now the sole owner of
+# post-resume DPMS recovery -- one owner for one job, per this repo's own
+# stated convention.
+
+# Holding suspend until the lock screen has drawn its text is NOT done here; it
+# is hypr-lock-sleep-gate's job. Measured 2026-09-20: a delay inhibitor taken
+# from this script is ignored by logind (created after the sleep request, suspend
+# entered 541 ms after the lock request), and a wait in the system-sleep "pre"
+# hook runs after user.slice is frozen. See the header of hypr-lock-sleep-gate.
 
 # fd 9 stays open for the lifetime of hyprlock, so the lock is held until it
 # exits. exec replaces this shell, keeping the descriptor.
