@@ -121,7 +121,11 @@ Scope {
         onTriggered: task.running = true
     }
 
-    SystemClock { id: clk; precision: SystemClock.Minutes }
+    // Qt schedules the clock's next tick on CLOCK_MONOTONIC, which does not
+    // advance during suspend (s2idle), so Minutes precision can display a
+    // time up to 60s stale right after wake even though the system clock
+    // itself is already correct. Seconds precision re-evaluates immediately.
+    SystemClock { id: clk; precision: SystemClock.Seconds }
 
     // Detached: a Process owns its child, and a config reload destroys the
     // Process — which killed every application started from the shell. See the
