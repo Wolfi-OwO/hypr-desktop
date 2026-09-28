@@ -911,7 +911,17 @@ ShellRoot {
                     property bool animated: false
                     width: 150; height: 150
                     radius: 10
-                    color: Qt.rgba(root.cText.r, root.cText.g, root.cText.b, 0.92)
+                    // Photo-mat white -- like the paper of a real print, fixed
+                    // regardless of theme. This used to read root.cText, which
+                    // is right in dark mode by coincidence (Theme.text dark is
+                    // #fdf6fb, near white) but inverts to near-black in light
+                    // mode (#241c2e) because cText is meant for actual
+                    // foreground text, not a decorative mat. Confirmed with
+                    // grim screenshots of both theme states: the mat rendered
+                    // solid black in light mode instead of staying a white
+                    // card. Value below is that same #fdf6fb, just no longer
+                    // wired to the property that is supposed to invert.
+                    color: Qt.rgba(0.992, 0.965, 0.984, 0.92)
                     border.width: 1
                     border.color: Qt.rgba(root.cSurface1.r, root.cSurface1.g,
                                           root.cSurface1.b, 0.9)

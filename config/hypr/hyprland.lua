@@ -488,6 +488,26 @@ hl.bind("CTRL + ALT + right", hl.dsp.exec_cmd(WS_NEXT))
 hl.bind("CTRL + ALT + up",    hl.dsp.exec_cmd(WS_PREV))
 hl.bind("CTRL + ALT + down",  hl.dsp.exec_cmd(WS_NEXT))
 
+-- Numpad-arrow mirror of the four binds above.
+--
+-- Not a duplicate: "left"/"right"/"up"/"down" only match the dedicated
+-- navigation-cluster keys. The numpad's own arrow overlay (4/6/8/2) sends a
+-- DIFFERENT keysym family (KP_Left/KP_Right/KP_Up/KP_Down with NumLock off,
+-- KP_4/KP_6/KP_8/KP_2 with it on), which had no bind at all here. Confirmed
+-- live with synthetic key events (ydotool) in both NumLock states: before
+-- this, CTRL+ALT+numpad-arrow did nothing whatsoever -- not a switch, not a
+-- move, no bind matched it. `hyprctl binds` before this change listed no
+-- "KP_*" entry anywhere. Bound to both keysym spellings so it works
+-- regardless of NumLock state.
+hl.bind("CTRL + ALT + KP_Left",  hl.dsp.exec_cmd(WS_PREV))
+hl.bind("CTRL + ALT + KP_Right", hl.dsp.exec_cmd(WS_NEXT))
+hl.bind("CTRL + ALT + KP_Up",    hl.dsp.exec_cmd(WS_PREV))
+hl.bind("CTRL + ALT + KP_Down",  hl.dsp.exec_cmd(WS_NEXT))
+hl.bind("CTRL + ALT + KP_4", hl.dsp.exec_cmd(WS_PREV))
+hl.bind("CTRL + ALT + KP_6", hl.dsp.exec_cmd(WS_NEXT))
+hl.bind("CTRL + ALT + KP_8", hl.dsp.exec_cmd(WS_PREV))
+hl.bind("CTRL + ALT + KP_2", hl.dsp.exec_cmd(WS_NEXT))
+
 -- GNOME's alternate bindings for the same action
 hl.bind(mainMod .. " + Page_Up",     hl.dsp.exec_cmd(WS_PREV))
 hl.bind(mainMod .. " + Page_Down",   hl.dsp.exec_cmd(WS_NEXT))
@@ -501,6 +521,19 @@ hl.bind("CTRL + SHIFT + ALT + left",  hl.dsp.exec_cmd(WS_MOVE_PREV))
 hl.bind("CTRL + SHIFT + ALT + right", hl.dsp.exec_cmd(WS_MOVE_NEXT))
 hl.bind("CTRL + SHIFT + ALT + up",    hl.dsp.exec_cmd(WS_MOVE_PREV))
 hl.bind("CTRL + SHIFT + ALT + down",  hl.dsp.exec_cmd(WS_MOVE_NEXT))
+
+-- Numpad-arrow mirror of the move binds above -- see the comment by the
+-- switch binds; same missing-keysym gap, same fix, kept behind the same
+-- extra SHIFT so numpad switch and numpad move stay as separate as the
+-- arrow-key versions already are.
+hl.bind("CTRL + SHIFT + ALT + KP_Left",  hl.dsp.exec_cmd(WS_MOVE_PREV))
+hl.bind("CTRL + SHIFT + ALT + KP_Right", hl.dsp.exec_cmd(WS_MOVE_NEXT))
+hl.bind("CTRL + SHIFT + ALT + KP_Up",    hl.dsp.exec_cmd(WS_MOVE_PREV))
+hl.bind("CTRL + SHIFT + ALT + KP_Down",  hl.dsp.exec_cmd(WS_MOVE_NEXT))
+hl.bind("CTRL + SHIFT + ALT + KP_4", hl.dsp.exec_cmd(WS_MOVE_PREV))
+hl.bind("CTRL + SHIFT + ALT + KP_6", hl.dsp.exec_cmd(WS_MOVE_NEXT))
+hl.bind("CTRL + SHIFT + ALT + KP_8", hl.dsp.exec_cmd(WS_MOVE_PREV))
+hl.bind("CTRL + SHIFT + ALT + KP_2", hl.dsp.exec_cmd(WS_MOVE_NEXT))
 
 hl.bind(mainMod .. " + SHIFT + Page_Up",   hl.dsp.exec_cmd(WS_MOVE_PREV))
 hl.bind(mainMod .. " + SHIFT + Page_Down", hl.dsp.exec_cmd(WS_MOVE_NEXT))
