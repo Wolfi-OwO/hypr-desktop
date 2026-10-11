@@ -173,9 +173,13 @@ Scope {
     readonly property color cRed:      Theme.red
     readonly property string uiFont: Theme.uiFont
 
+    // Qt schedules the clock's next tick on CLOCK_MONOTONIC, which does not
+    // advance during suspend (s2idle), so Minutes precision can display a
+    // stale weekday/date up to 60s after wake even though the system clock
+    // itself is already correct. Seconds precision re-evaluates immediately.
     SystemClock {
         id: clk
-        precision: SystemClock.Minutes
+        precision: SystemClock.Seconds
     }
 
     // ---- Notification-Server ----------------------------------------------
