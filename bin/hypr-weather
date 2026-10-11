@@ -199,7 +199,7 @@ def main():
         print(json.dumps(data, ensure_ascii=False))
     except Exception as e:
         # stderr is what hypr-eventd logs for a periodic run; without this line a
-        # failing fetch was indistinguishable from "no new data" (issue #1).
+        # failing fetch was indistinguishable from "no new data".
         print(f"hypr-weather: fetch failed: {type(e).__name__}: {e}", file=sys.stderr)
         # Network down: serve the last good reading, flagged stale, rather
         # than leaving the widget blank.
