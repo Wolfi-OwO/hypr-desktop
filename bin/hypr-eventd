@@ -683,19 +683,33 @@ def watch_weather(mqtt, stop):
     than placeholders. Same reasoning as moving the caches to ~/.cache.
     """
     interval = 900  # Open-Meteo updates roughly every 15 minutes
+    retry = 60  # a failed fetch is retried soon instead of leaving "(alt)" up for 15 minutes
     while not stop.is_set():
+        wait = interval
         try:
-            out = subprocess.run(
+            run = subprocess.run(
                 [os.path.expanduser("~/.local/bin/hypr-weather")],
                 capture_output=True, text=True, timeout=30,
-            ).stdout.strip()
+            )
+            out = run.stdout.strip()
+            if run.stderr.strip():
+                print(f"hypr-eventd: weather: {run.stderr.strip()}", file=sys.stderr, flush=True)
             if out:
                 # Published straight through: hypr-weather already emits the
                 # exact JSON object the widget consumes.
                 mqtt.publish("hypr/weather", out)
-        except (OSError, subprocess.SubprocessError):
-            pass
-        stop.wait(interval)
+                try:
+                    if json.loads(out).get("stale"):
+                        wait = retry
+                except ValueError:
+                    pass
+            else:
+                print(f"hypr-eventd: weather: no output (exit {run.returncode})", file=sys.stderr, flush=True)
+                wait = retry
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"hypr-eventd: weather: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+            wait = retry
+        stop.wait(wait)
 
 
 def watch_apps(mqtt, stop):

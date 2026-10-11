@@ -198,6 +198,9 @@ def main():
             json.dump(data, f, ensure_ascii=False)
         print(json.dumps(data, ensure_ascii=False))
     except Exception as e:
+        # stderr is what hypr-eventd logs for a periodic run; without this line a
+        # failing fetch was indistinguishable from "no new data" (issue #1).
+        print(f"hypr-weather: fetch failed: {type(e).__name__}: {e}", file=sys.stderr)
         # Network down: serve the last good reading, flagged stale, rather
         # than leaving the widget blank.
         if os.path.exists(CACHE):
@@ -205,6 +208,7 @@ def main():
                 with open(CACHE) as f:
                     old = json.load(f)
                 old["stale"] = True
+                old["error"] = str(e)[:80]
                 print(json.dumps(old, ensure_ascii=False))
                 return
             except Exception:
