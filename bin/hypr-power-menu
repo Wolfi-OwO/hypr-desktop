@@ -29,7 +29,7 @@ choice=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
     | rofi_right "System") || exit 0
 
 case "$choice" in
-    "$lock")     exec hyprlock ;;
+    "$lock")     exec /home/woofi/.local/bin/hypr-lock ;;
     # hyprctl dispatch evaluates LUA in 0.56, not legacy dispatcher names,
     # so this must be the Lua call form (matches the shipped example config).
     "$logout")   exec hyprctl dispatch 'hl.dsp.exit()' ;;

@@ -155,8 +155,9 @@ The console flash before the greeter is fixed by a script that sets the console
 palette. It needs root and touches SDDM's `Xsetup`/`Xstop`, so it is not copied
 by the steps above — see TROUBLESHOOTING.md if you want it.
 
-`install.sh` also deliberately skips three other root-owned files that need a
+`install.sh` also deliberately skips four other root-owned files that need a
 manual `sudo cp` if you want them: `systemd/system-sleep/hypr-resume`,
-`systemd/networkmanager/90-hypr-refresh`, and
-`systemd/logind.conf.d/10-inhibit-delay.conf` (see TROUBLESHOOTING.md for the
-last one's install line).
+`systemd/networkmanager/90-hypr-refresh`,
+`systemd/logind.conf.d/10-inhibit-delay.conf`, and
+`systemd/timesyncd.conf.d/10-fast-retry.conf` (see TROUBLESHOOTING.md for the
+last two's install lines).

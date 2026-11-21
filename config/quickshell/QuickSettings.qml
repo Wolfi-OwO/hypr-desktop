@@ -470,7 +470,7 @@ Scope {
                             }
                         }
 
-                        Act { label: "Sperren";     icon: 0xf033e; cmd: "hyprlock" }
+                        Act { label: "Sperren";     icon: 0xf033e; cmd: "/home/woofi/.local/bin/hypr-lock" }
                         Act { label: "Abmelden";    icon: 0xf0343; cmd: "hyprctl dispatch 'hl.dsp.exit()'" }
                         Act { label: "Bereitschaft"; icon: 0xf04b2; cmd: "systemctl suspend" }
                         Act { label: "Neu starten"; icon: 0xf0709; cmd: "systemctl reboot" }

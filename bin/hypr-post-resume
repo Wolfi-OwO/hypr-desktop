@@ -8,6 +8,11 @@
 # ("Seems we got yeeten" in its log). Removed once the actual cause (the
 # 480s listener dispatching dpms off) was fixed directly in hypridle.conf.
 
+# Measures whether i915 kept the backlight at 0 across resume (set by
+# hypridle's before_sleep_cmd) or relit it on its own -- an open question
+# until this is read at a real resume.
+logger -t hypr-post-resume "backlight at resume: $(cat /sys/class/backlight/intel_backlight/actual_brightness)"
+
 systemd-run --user --scope --collect --quiet -- \
     /home/woofi/.local/bin/hypr-dpms-ensure-on >/dev/null 2>&1 &
 disown
@@ -30,8 +35,9 @@ disown
 # that, proven by the dpms-ensure-on call two lines up succeeding on the
 # same resume where the bare block silently didn't.
 systemd-run --user --scope --collect --quiet -- \
-    sh -c 'sleep 0.6
+    sh -c 'sleep 1.5
            brightnessctl set 100%
-           brightnessctl -d platform::kbd_backlight set 100%' \
+           brightnessctl -d platform::kbd_backlight set 100%
+           logger -t hypr-post-resume "backlight restored"' \
     >/dev/null 2>&1 &
 disown

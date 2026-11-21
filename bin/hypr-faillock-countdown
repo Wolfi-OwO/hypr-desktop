@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Live lockout countdown for the hyprlock input field.
+#
+# Why this script exists (measured against this machine's PAM chain and
+# hyprlock 0.9.6, not assumed):
+# - hyprlock's $FAIL is a one-shot string, filled once from PAM's info
+#   message at the moment of a failed attempt, and never updated again on
+#   its own -- so a "(N minutes left to unlock)" shown via $FAIL freezes at
+#   whatever N was at that instant, even though the real remaining time
+#   keeps counting down underneath it.
+# - The 3rd failed attempt is the one that actually triggers the lock (via
+#   `[default=die] pam_faillock.so authfail` in system-auth), but that
+#   attempt's own $FAIL text is plain "Authentication failed" -- no PAM info
+#   message containing "left to unlock" is emitted for it, so the frozen
+#   label gives no indication a lockout just started at all.
+# - /run/faillock/<user> is owned by that user, mode 0660, so this reads the
+#   real tally without root (confirmed: `faillock --user woofi` as a normal
+#   user exits 0 and prints the tally).
+#
+# Wired into hyprlock.conf via cmd[update:1000], the same interval already
+# used there for the clock/battery labels -- see that file's CLOCK section
+# comment for why: hyprlock's cmd[update:N] timer runs on CLOCK_MONOTONIC,
+# which does not advance during suspend, so a short interval is what keeps
+# the value from reading stale right after resume.
+set -u
+
+# FAILLOCK_DIR overrides the tally directory. This exists purely so the
+# self-test (and any manual check) can point at a throwaway directory
+# instead of ever touching the real account's tally.
+deny=3
+fail_interval=900
+unlock_time=600
+dir="${FAILLOCK_DIR:-}"
+
+conf="${FAILLOCK_CONF:-/etc/security/faillock.conf}"
+if [ -z "$dir" ] && [ -r "$conf" ]; then
+    # Every setting in this file ships commented out (confirmed by reading
+    # it directly) -- the numbers above are today's compiled-in pam_faillock
+    # defaults. Read the file anyway so this script stays correct the day
+    # the user uncomments an override.
+    read_setting() {
+        awk -F= -v k="$1" '$0 ~ "^[[:space:]]*"k"[[:space:]]*=" {
+            gsub(/[[:space:]]/, "", $2); print $2; exit
+        }' "$conf"
+    }
+    v=$(read_setting deny);          [ -n "$v" ] && deny=$v
+    v=$(read_setting fail_interval); [ -n "$v" ] && fail_interval=$v
+    v=$(read_setting unlock_time);   [ -n "$v" ] && unlock_time=$v
+    v=$(read_setting dir);           [ -n "$v" ] && dir=$v
+fi
+[ -n "$dir" ] || dir="${FAILLOCK_DIR:-/var/run/faillock}"
+
+# faillock.conf(5): unlock_time=never means a permanent lock cleared only by
+# `faillock --reset` -- route it into the existing unlock_time==0 branch
+# below instead of letting it hit arithmetic as a non-numeric string.
+case "$unlock_time" in never) unlock_time=0 ;; esac
+# Config values are about to be used in arithmetic ([ -eq ], $(( )) further
+# down) -- guard against anything else unexpected in the config file rather
+# than crashing under set -u/-e on the lock screen.
+case "$deny$fail_interval$unlock_time" in *[!0-9]*|'') exit 0 ;; esac
+
+user="$(id -un)"
+now=$(date +%s)
+
+# A broken helper must never disturb the lock screen's rendering: always
+# exit 0, and print nothing if faillock itself fails for any reason.
+out=$(faillock --dir "$dir" --user "$user" 2>/dev/null) || exit 0
+
+# Rows look like "2026-10-01 19:13:35 SVC   test   V" (NR 1-2 are the
+# "<user>:" line and the "When Type Source Valid" column header). Count
+# valid (V) rows within fail_interval seconds of now, and track the newest
+# such timestamp -- that's the one unlock_time counts forward from.
+read -r count newest <<EOF
+$(echo "$out" | awk -v now="$now" -v interval="$fail_interval" '
+    NR > 2 && $NF == "V" {
+        # Validate the When columns before trusting them at all -- no shell
+        # command string is ever built from faillock output now, so a
+        # crafted Source field (newline + command substitution) has no
+        # subshell left to land in. mktime() uses local time, matching the
+        # format faillock itself prints.
+        if ($1 !~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/ || $2 !~ /^[0-9]{2}:[0-9]{2}:[0-9]{2}$/) next
+        ts = mktime(gensub(/[-:]/, " ", "g", $1 " " $2))
+        if (ts < 0 || now - ts > interval) next
+        count++
+        if (ts > newest) newest = ts
+    }
+    END { print count+0, newest+0 }
+')
+EOF
+
+[ "$count" -ge "$deny" ] || exit 0
+
+if [ "$unlock_time" -eq 0 ]; then
+    printf 'Gesperrt\n'
+    exit 0
+fi
+
+remaining=$((newest + unlock_time - now))
+[ "$remaining" -gt 0 ] || exit 0
+
+printf 'Gesperrt – entsperrt in %d:%02d\n' "$((remaining / 60))" "$((remaining % 60))"

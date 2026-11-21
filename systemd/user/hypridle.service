@@ -14,6 +14,17 @@ ExecStart=/usr/bin/hypridle
 # with nothing running to lock it. `always` covers a clean exit too.
 Restart=always
 RestartSec=2
+# Default KillMode=control-group kills every process in this unit's cgroup on
+# stop/restart, including any hyprlock spawned by before_sleep_cmd or an idle
+# listener -- even one holding a real, live session lock. Measured 2026-09-27:
+# 17:56:48.9 `systemctl --user restart hypridle.service` killed pid 48401,
+# which had locked the session at 17:56:12.7, leaving it lockdead; the next
+# hyprlock (pid 50739, spawned by before_sleep_cmd at 17:56:58.06) was yeeten
+# as a duplicate lock and then held hypr-lock.flock for 17+ minutes, so every
+# later lock attempt (idle timeout, SUPER+L, suspend) silently no-op'd on the
+# held flock. `process` only signals hypridle itself, so a locked hyprlock
+# child survives a hypridle restart or respawn.
+KillMode=process
 
 [Install]
 # NOT graphical-session.target: it is never activated under Hyprland, which is

@@ -321,6 +321,17 @@ new unit: `systemd/system-sleep/hypr-resume` now runs
 everywhere else in that file -- see the header comment on why a blocking
 call in a `system-sleep` hook freezes `user.slice` for its whole duration.
 
+That restart alone was not enough: `systemd-timesyncd`'s default
+`ConnectionRetrySec=30` meant the restart could race ahead of Wi-Fi
+reconnecting, so the first NTP attempt failed and the next retry didn't fire
+for a full 30s even once the network was usable. Measured 2026-09-13: Wi-Fi
+reconnected (NetworkManager `CONNECTED_GLOBAL`) at 08:40:18, but the next NTP
+contact didn't happen until 08:40:45 -- 27s after the network was already
+ready. Fixed with a drop-in that shortens the retry to 2s, tracked in this
+repo at `systemd/timesyncd.conf.d/10-fast-retry.conf`; `install.sh` does not
+copy it (root-owned target), so apply it by hand:
+`sudo install -Dm644 systemd/timesyncd.conf.d/10-fast-retry.conf /etc/systemd/timesyncd.conf.d/10-fast-retry.conf && sudo systemctl restart systemd-timesyncd`.
+
 ## Lockdead screen flashes before the real lock screen on lid-open
 
 Opening the lid briefly shows Hyprland's own `lockdead.png`/`lockdead2.png`
